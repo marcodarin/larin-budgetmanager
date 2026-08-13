@@ -64,7 +64,11 @@ export async function creaOffertaInviata(
     .maybeSingle();
   if (!termine) throw new Error('Termine di pagamento 30gg DF assente sullo staging');
 
-  const offeredTotal = opzioni.varianteSenzaPrezziDiRiga ? 9000 : 12250;
+  // 11.500 su un listino di 13.000 è uno sconto effettivo dell'11,5%: sotto la
+  // soglia di approvazione del 15%, quindi l'offerta esce davvero invece di
+  // fermarsi in approvazione, e resta comunque lontano dai 12.250 delle righe,
+  // che è ciò che attiva il caso del prezzo unico omnicomprensivo.
+  const offeredTotal = opzioni.varianteSenzaPrezziDiRiga ? 11500 : 12250;
 
   const { data: offerta, error: erroreOfferta } = await db
     .from('offers')

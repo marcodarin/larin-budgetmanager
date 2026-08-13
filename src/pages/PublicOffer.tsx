@@ -144,8 +144,25 @@ const outcomeMessages: Record<Exclude<ResolveOutcome, 'ok'>, { title: string; me
   },
 };
 
+/**
+ * Gli importi si scrivono come in Italia (1.234,56 €), non come nel PDF di un
+ * gestionale americano: il cliente legge un documento commerciale, e "€1234.56"
+ * lo fa sembrare una schermata di debug. È anche la forma che usa il PDF, e le
+ * due cose devono coincidere.
+ */
+const formattatoreEuro = new Intl.NumberFormat('it-IT', {
+  style: 'currency',
+  currency: 'EUR',
+  minimumFractionDigits: 2,
+  // Senza 'always' l'italiano non raggruppa i numeri di quattro cifre, e nella
+  // stessa tabella si leggerebbe "3500,00 €" accanto a "12.250,00 €". Il PDF
+  // raggruppa sempre: due documenti che mostrano gli stessi numeri in due modi
+  // diversi fanno dubitare di entrambi.
+  useGrouping: 'always',
+});
+
 function formatCurrency(value: number): string {
-  return `€${Number(value).toFixed(2)}`;
+  return formattatoreEuro.format(Number(value));
 }
 
 function formatPercent(value: number): string {
@@ -536,19 +553,14 @@ const PublicOffer = () => {
                     </TableBody>
                   </Table>
                 </div>
-                <div className="mt-4 space-y-1.5 border-t pt-4">
-                  <div className="flex justify-between text-sm text-muted-foreground">
-                    <span>Totale di listino</span>
-                    <span>{formatCurrency(doc.version.list_total)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm text-muted-foreground">
-                    <span>Sconto applicato</span>
-                    <span>{doc.version.effective_discount_percentage.toFixed(1)}%</span>
-                  </div>
-                  <div className="flex justify-between text-lg font-bold">
-                    <span>Totale offerto</span>
-                    <span>{formatCurrency(doc.version.offered_total)}</span>
-                  </div>
+                {/* Totale di listino e sconto effettivo restano fuori: sono
+                    numeri nostri, servono alle soglie di approvazione e alla
+                    statistica interna. Dirli al cliente sposta la trattativa
+                    sullo sconto invece che sul valore, e il PDF che firma non
+                    li riporta: le due cose devono coincidere. */}
+                <div className="mt-4 flex justify-between border-t pt-4 text-lg font-bold">
+                  <span>Totale offerto</span>
+                  <span>{formatCurrency(doc.version.offered_total)}</span>
                 </div>
               </>
             ) : (
