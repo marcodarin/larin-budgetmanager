@@ -91,11 +91,11 @@ export const CreateOfferDialog = ({ open, onOpenChange, onCreated }: CreateOffer
         .single();
       if (versionError) throw versionError;
 
-      const { error: updateError } = await supabase
-        .from('offers')
-        .update({ current_version_id: newVersion.id })
-        .eq('id', newOffer.id);
-      if (updateError) throw updateError;
+      // La versione corrente non si scrive più da qui: la prima versione di
+      // un'offerta la assume da sé (trigger offer_versions_set_first_as_current)
+      // e dopo il puntatore si muove solo all'invio, mai alla creazione di una
+      // revisione. Il privilegio di UPDATE su quella colonna è stato revocato
+      // proprio per impedire che due strade decidano chi è la corrente.
 
       // Registra l'evento di creazione nel registro append-only (transizione
       // "bozza" -> "bozza": nessun cambio di stato reale, solo la traccia).
