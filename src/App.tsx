@@ -32,6 +32,7 @@ const RolesDocumentation = React.lazy(() => import("./pages/RolesDocumentation")
 const Notifications = React.lazy(() => import("./pages/Notifications"));
 const NotFound = React.lazy(() => import("./pages/NotFound"));
 const PublicTimesheet = React.lazy(() => import("./pages/PublicTimesheet"));
+const PublicOffer = React.lazy(() => import("./pages/PublicOffer"));
 const StyleGuide = React.lazy(() => import("./pages/StyleGuide"));
 const Workload = React.lazy(() => import("./pages/Workload"));
 const Workflows = React.lazy(() => import("./pages/Workflows"));
@@ -59,6 +60,7 @@ const App = () => (
               <Route path="/forgot-password" element={<ForgotPassword />} />
               <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/timesheet/public" element={<PublicTimesheet />} />
+              <Route path="/offerta/:token" element={<PublicOffer />} />
               <Route path="/.lovable/oauth/consent" element={<OAuthConsent />} />
               <Route path="/" element={<Dashboard />} />
               <Route path="/budgets" element={<AppLayout><Index /></AppLayout>} />

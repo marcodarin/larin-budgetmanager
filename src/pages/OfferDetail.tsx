@@ -22,6 +22,7 @@ import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { hasPermission } from '@/lib/permissions';
 import { OfferStatusSelector, offerStatusConfig } from '@/components/OfferStatusSelector';
 import { OfferPaymentPlanSection } from '@/components/OfferPaymentPlanSection';
+import { OfferPublicLinkPanel } from '@/components/offers/OfferPublicLinkPanel';
 import type { Database } from '@/integrations/supabase/types';
 
 type OfferLineRow = Database['public']['Tables']['offer_lines']['Row'];
@@ -34,7 +35,7 @@ type OfferDetailRow = {
   number: number;
   project_id: string | null;
   current_version_id: string | null;
-  clients: { id: string; name: string } | null;
+  clients: { id: string; name: string; email: string | null } | null;
   projects: { id: string; name: string } | null;
 };
 
@@ -78,7 +79,7 @@ const OfferDetail = () => {
         .from('offers')
         .select(`
           id, year, number, project_id, current_version_id,
-          clients ( id, name ),
+          clients ( id, name, email ),
           projects ( id, name )
         `)
         .eq('id', offerId)
@@ -522,6 +523,21 @@ const OfferDetail = () => {
           canManage={canManage}
           isBozza={isBozza}
           onBillingModeChange={refetchVersions}
+        />
+      )}
+
+      {versions.some((v) => v.status !== 'bozza') && (
+        <OfferPublicLinkPanel
+          offerId={offer.id}
+          offerReference={`${offer.year}/${offer.number}`}
+          clientEmail={offer.clients?.email ?? null}
+          versions={versions}
+          canManage={canManage}
+          // create_offer_public_link (e l'invio, che la richiama se manca un
+          // link) richiedono la versione CORRENTE inviata: "fuori dalla
+          // bozza" non basta più da quando current_version_id si muove solo
+          // all'invio (in_approvazione non lo imposta ancora).
+          hasSentVersion={versions.some((v) => v.id === offer.current_version_id && v.status !== 'bozza')}
         />
       )}
 

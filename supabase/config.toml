@@ -105,3 +105,9 @@ verify_jwt = false
 
 [functions.send-weekly-team-hours-report]
 verify_jwt = false
+
+[functions.offer-send-to-client]
+verify_jwt = true
+
+[functions.offer-public]
+verify_jwt = false

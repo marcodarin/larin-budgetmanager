@@ -1578,6 +1578,219 @@ export type Database = {
           },
         ]
       }
+      offer_public_link_accesses: {
+        Row: {
+          accessed_at: string
+          client_ip: unknown
+          id: string
+          offer_version_id: string | null
+          outcome: string
+          public_link_id: string
+          user_agent: string | null
+        }
+        Insert: {
+          accessed_at?: string
+          client_ip?: unknown
+          id?: string
+          offer_version_id?: string | null
+          outcome: string
+          public_link_id: string
+          user_agent?: string | null
+        }
+        Update: {
+          accessed_at?: string
+          client_ip?: unknown
+          id?: string
+          offer_version_id?: string | null
+          outcome?: string
+          public_link_id?: string
+          user_agent?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "offer_public_link_accesses_offer_version_id_fkey"
+            columns: ["offer_version_id"]
+            isOneToOne: false
+            referencedRelation: "offer_versions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offer_public_link_accesses_public_link_id_fkey"
+            columns: ["public_link_id"]
+            isOneToOne: false
+            referencedRelation: "offer_public_links"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      offer_public_links: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          expires_at: string | null
+          id: string
+          last_sent_at: string | null
+          last_sent_to: string | null
+          offer_id: string
+          revoked_at: string | null
+          revoked_by: string | null
+          sent_count: number
+          token: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string | null
+          id?: string
+          last_sent_at?: string | null
+          last_sent_to?: string | null
+          offer_id: string
+          revoked_at?: string | null
+          revoked_by?: string | null
+          sent_count?: number
+          token: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string | null
+          id?: string
+          last_sent_at?: string | null
+          last_sent_to?: string | null
+          offer_id?: string
+          revoked_at?: string | null
+          revoked_by?: string | null
+          sent_count?: number
+          token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "offer_public_links_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offer_public_links_offer_id_fkey"
+            columns: ["offer_id"]
+            isOneToOne: false
+            referencedRelation: "offers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offer_public_links_revoked_by_fkey"
+            columns: ["revoked_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      offer_signatures: {
+        Row: {
+          client_ip: unknown
+          created_at: string
+          decision: Database["public"]["Enums"]["offer_client_decision"]
+          document_hash: string
+          id: string
+          offer_version_id: string
+          public_link_id: string
+          reject_reason: string | null
+          signature_image_path: string | null
+          signed_pdf_path: string | null
+          signer_email: string | null
+          signer_name: string
+          signer_role: string | null
+          user_agent: string | null
+        }
+        Insert: {
+          client_ip: unknown
+          created_at?: string
+          decision: Database["public"]["Enums"]["offer_client_decision"]
+          document_hash: string
+          id?: string
+          offer_version_id: string
+          public_link_id: string
+          reject_reason?: string | null
+          signature_image_path?: string | null
+          signed_pdf_path?: string | null
+          signer_email?: string | null
+          signer_name: string
+          signer_role?: string | null
+          user_agent?: string | null
+        }
+        Update: {
+          client_ip?: unknown
+          created_at?: string
+          decision?: Database["public"]["Enums"]["offer_client_decision"]
+          document_hash?: string
+          id?: string
+          offer_version_id?: string
+          public_link_id?: string
+          reject_reason?: string | null
+          signature_image_path?: string | null
+          signed_pdf_path?: string | null
+          signer_email?: string | null
+          signer_name?: string
+          signer_role?: string | null
+          user_agent?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "offer_signatures_offer_version_id_fkey"
+            columns: ["offer_version_id"]
+            isOneToOne: false
+            referencedRelation: "offer_versions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "offer_signatures_public_link_id_fkey"
+            columns: ["public_link_id"]
+            isOneToOne: false
+            referencedRelation: "offer_public_links"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      offer_version_documents: {
+        Row: {
+          frozen_at: string
+          id: string
+          offer_version_id: string
+          pdf_generated_at: string | null
+          pdf_path: string | null
+          snapshot: Json
+          snapshot_hash: string
+        }
+        Insert: {
+          frozen_at?: string
+          id?: string
+          offer_version_id: string
+          pdf_generated_at?: string | null
+          pdf_path?: string | null
+          snapshot: Json
+          snapshot_hash: string
+        }
+        Update: {
+          frozen_at?: string
+          id?: string
+          offer_version_id?: string
+          pdf_generated_at?: string | null
+          pdf_path?: string | null
+          snapshot?: Json
+          snapshot_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "offer_version_documents_offer_version_id_fkey"
+            columns: ["offer_version_id"]
+            isOneToOne: true
+            referencedRelation: "offer_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       offer_versions: {
         Row: {
           billing_mode: Database["public"]["Enums"]["offer_billing_mode"]
@@ -2126,6 +2339,7 @@ export type Database = {
           payment_terms: string | null
           product_nature: Database["public"]["Enums"]["product_nature"] | null
           revenue_category: string | null
+          terms_text: string | null
           updated_at: string
           user_id: string
           vat_rate: number
@@ -2143,6 +2357,7 @@ export type Database = {
           payment_terms?: string | null
           product_nature?: Database["public"]["Enums"]["product_nature"] | null
           revenue_category?: string | null
+          terms_text?: string | null
           updated_at?: string
           user_id: string
           vat_rate?: number
@@ -2160,6 +2375,7 @@ export type Database = {
           payment_terms?: string | null
           product_nature?: Database["public"]["Enums"]["product_nature"] | null
           revenue_category?: string | null
+          terms_text?: string | null
           updated_at?: string
           user_id?: string
           vat_rate?: number
@@ -3828,6 +4044,36 @@ export type Database = {
       }
       admin_run_cron_job_now: { Args: { p_jobid: number }; Returns: Json }
       admin_set_cron_secret: { Args: { p_secret: string }; Returns: string }
+      attach_offer_signature_pdf: {
+        Args: { _pdf_path: string; _signature_id: string }
+        Returns: undefined
+      }
+      attach_offer_version_pdf: {
+        Args: {
+          _expected_snapshot_hash?: string
+          _offer_version_id: string
+          _pdf_path: string
+        }
+        Returns: {
+          frozen_at: string
+          id: string
+          offer_version_id: string
+          pdf_generated_at: string | null
+          pdf_path: string | null
+          snapshot: Json
+          snapshot_hash: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "offer_version_documents"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      build_offer_version_snapshot: {
+        Args: { _offer_version_id: string }
+        Returns: Json
+      }
       can_access_project_tasks: {
         Args: { _project_id: string }
         Returns: boolean
@@ -3850,8 +4096,48 @@ export type Database = {
         Args: { _document_date: string; _payment_term_id: string }
         Returns: string
       }
+      create_offer_public_link: {
+        Args: { _expires_in_days?: number; _offer_id: string }
+        Returns: {
+          created_at: string
+          created_by: string | null
+          expires_at: string | null
+          id: string
+          last_sent_at: string | null
+          last_sent_to: string | null
+          offer_id: string
+          revoked_at: string | null
+          revoked_by: string | null
+          sent_count: number
+          token: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "offer_public_links"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       delete_user_completely: { Args: { _user_id: string }; Returns: undefined }
       execute_readonly_query: { Args: { query_text: string }; Returns: Json }
+      freeze_offer_version_document: {
+        Args: { _offer_version_id: string }
+        Returns: {
+          frozen_at: string
+          id: string
+          offer_version_id: string
+          pdf_generated_at: string | null
+          pdf_path: string | null
+          snapshot: Json
+          snapshot_hash: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "offer_version_documents"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       get_hourly_rates_for_costing: {
         Args: { _user_ids?: string[] }
         Returns: {
@@ -3956,6 +4242,10 @@ export type Database = {
         Args: { _offer_version_id: string; _reason: string }
         Returns: undefined
       }
+      notify_offer_client_activity: {
+        Args: { _detail?: string; _kind: string; _offer_version_id: string }
+        Returns: undefined
+      }
       notify_user_if_enabled: {
         Args: {
           _message: string
@@ -3981,7 +4271,52 @@ export type Database = {
           project_name: string
         }[]
       }
+      record_offer_client_decision: {
+        Args: {
+          _client_ip?: unknown
+          _decision: Database["public"]["Enums"]["offer_client_decision"]
+          _expected_document_hash: string
+          _reject_reason?: string
+          _signature_image_path?: string
+          _signer_email?: string
+          _signer_name: string
+          _signer_role?: string
+          _token: string
+          _user_agent?: string
+        }
+        Returns: Json
+      }
+      record_offer_link_sent: {
+        Args: { _public_link_id: string; _sent_to: string }
+        Returns: undefined
+      }
+      resolve_offer_public_link: {
+        Args: { _client_ip?: unknown; _token: string; _user_agent?: string }
+        Returns: Json
+      }
       restore_user: { Args: { _user_id: string }; Returns: undefined }
+      revoke_offer_public_link: {
+        Args: { _public_link_id: string }
+        Returns: {
+          created_at: string
+          created_by: string | null
+          expires_at: string | null
+          id: string
+          last_sent_at: string | null
+          last_sent_to: string | null
+          offer_id: string
+          revoked_at: string | null
+          revoked_by: string | null
+          sent_count: number
+          token: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "offer_public_links"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       set_offer_version_status: {
         Args: {
           _actor_type: Database["public"]["Enums"]["offer_event_actor_type"]
@@ -4014,6 +4349,14 @@ export type Database = {
         }
       }
       soft_delete_user: { Args: { _user_id: string }; Returns: undefined }
+      supersede_other_offer_versions: {
+        Args: {
+          _also_supersede_accepted?: boolean
+          _keep_version_id: string
+          _offer_id: string
+        }
+        Returns: undefined
+      }
       validate_offer_payment_terms_balance: {
         Args: { _offer_version_id: string }
         Returns: undefined
@@ -4054,6 +4397,7 @@ export type Database = {
         | "ricorrente"
         | "a_giornate"
         | "tetto_di_spesa"
+      offer_client_decision: "accettata" | "rifiutata"
       offer_event_actor_type: "user" | "client" | "system"
       offer_origin: "commercial" | "tender"
       offer_payment_term_maturity_event:
@@ -4241,6 +4585,7 @@ export const Constants = {
         "a_giornate",
         "tetto_di_spesa",
       ],
+      offer_client_decision: ["accettata", "rifiutata"],
       offer_event_actor_type: ["user", "client", "system"],
       offer_origin: ["commercial", "tender"],
       offer_payment_term_maturity_event: [
