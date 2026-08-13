@@ -23,6 +23,8 @@ const ProjectCanvas = React.lazy(() => import("./pages/ProjectCanvas"));
 const Calendar = React.lazy(() => import("./pages/Calendar"));
 const Quotes = React.lazy(() => import("./pages/Quotes"));
 const QuoteDetail = React.lazy(() => import("./pages/QuoteDetail"));
+const Offers = React.lazy(() => import("./pages/Offers"));
+const OfferDetail = React.lazy(() => import("./pages/OfferDetail"));
 const ApprovedProjects = React.lazy(() => import("./pages/ApprovedProjects"));
 const Settings = React.lazy(() => import("./pages/Settings"));
 const Profile = React.lazy(() => import("./pages/Profile"));
@@ -67,6 +69,8 @@ const App = () => (
               <Route path="/approved-projects" element={<AppLayout><ApprovedProjects /></AppLayout>} />
               <Route path="/quotes" element={<AppLayout><Quotes /></AppLayout>} />
               <Route path="/quotes/:quoteId" element={<AppLayout><QuoteDetail /></AppLayout>} />
+              <Route path="/offers" element={<AppLayout><Offers /></AppLayout>} />
+              <Route path="/offers/:offerId" element={<AppLayout><OfferDetail /></AppLayout>} />
               <Route path="/settings" element={<AppLayout><Settings /></AppLayout>} />
               <Route path="/roles-documentation" element={<AppLayout><RolesDocumentation /></AppLayout>} />
               <Route path="/notifications" element={<AppLayout><Notifications /></AppLayout>} />
