@@ -36,9 +36,9 @@ test.describe('la pagina che il cliente apre', () => {
     await page.goto(`/offerta/${offerta.token}`);
 
     await expect(page.getByRole('heading', { name: `Offerta ${offerta.reference}` })).toBeVisible();
-    await expect(page.getByText('Aurora Manifatture Srl')).toBeVisible();
-    await expect(page.getByText('Analisi strategica e piano di comunicazione')).toBeVisible();
-    await expect(page.getByText('12.250,00 €').first()).toBeVisible();
+    await expect(page.getByText('Aurora Manifatture Srl').filter({ visible: true }).first()).toBeVisible();
+    await expect(page.getByText('Analisi strategica e piano di comunicazione').filter({ visible: true }).first()).toBeVisible();
+    await expect(page.getByText('12.250,00 €').filter({ visible: true }).first()).toBeVisible();
 
     // Il piano di pagamento si legge come una frase, non come un record.
     await expect(page.getByText(/40% alla firma, pagamento a 30 giorni data documento/)).toBeVisible();
@@ -170,7 +170,7 @@ test.describe('la pagina che il cliente apre', () => {
     });
 
     await page.getByRole('button', { name: 'Accetta e firma' }).click();
-    await expect(page.getByText(/cambiat/i).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/aggiornata nel frattempo/i).first()).toBeVisible({ timeout: 15_000 });
 
     // E soprattutto: nel database non deve esserci nessuna firma.
     const { count } = await db
@@ -187,7 +187,7 @@ test.describe('il caso del prezzo unico omnicomprensivo', () => {
     await page.goto(`/offerta/${offerta.token}`);
 
     await expect(page.getByRole('heading', { name: `Offerta ${offerta.reference}` })).toBeVisible();
-    await expect(page.getByText('11.500,00 €').first()).toBeVisible();
+    await expect(page.getByText('11.500,00 €').filter({ visible: true }).first()).toBeVisible();
     // I prezzi delle singole voci sono una scelta commerciale che qui non si fa.
     await expect(page.getByText('6.750,00 €')).toHaveCount(0);
     await expect(page.getByText('3.500,00 €')).toHaveCount(0);

@@ -327,7 +327,17 @@ const PublicOffer = () => {
         // cliente teneva la pagina aperta mentre l'offerta veniva rivista):
         // qui non basta il messaggio, va anche ricaricato il documento,
         // perché l'hash e il contenuto mostrati non sono più quelli veri.
-        toast.error(result?.error || 'Non è stato possibile registrare la risposta.');
+        // Il messaggio del database dice "ricaricare la pagina prima di
+        // firmare", ma la pagina si ricarica da sola qui sotto: al cliente
+        // chiederebbe una cosa già fatta. Meglio dirgli cosa è successo e cosa
+        // guardare adesso.
+        if (response.status === 409) {
+          toast.error("L'offerta è stata aggiornata nel frattempo: controlla i nuovi importi e firma di nuovo.");
+          sigRef.current?.clear();
+          setHasSignature(false);
+        } else {
+          toast.error(result?.error || 'Non è stato possibile registrare la risposta.');
+        }
         await loadDocument();
         return;
       }
@@ -376,7 +386,13 @@ const PublicOffer = () => {
 
   // --- Stati che non mostrano il documento -----------------------------
 
-  if (loadState === 'loading') {
+  // Lo spinner a tutta pagina vale solo per il primo caricamento. Se il
+  // documento è già a schermo e lo stiamo rileggendo (succede dopo un conflitto,
+  // quando l'offerta è cambiata mentre il cliente firmava), sostituire l'intera
+  // pagina smonterebbe il canvas e cancellerebbe la firma appena disegnata,
+  // lasciando però il pulsante abilitato: il cliente ripreme convinto di aver
+  // firmato e si sente dire di firmare. Proprio nel momento più delicato.
+  if (loadState === 'loading' && !data) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -480,7 +496,10 @@ const PublicOffer = () => {
               {decisionResult.pdfUrl && (
                 <Button size="sm" onClick={() => window.open(decisionResult.pdfUrl!, '_blank', 'noopener,noreferrer')} className="print:hidden">
                   <Download className="mr-2 h-4 w-4" />
-                  Scarica il PDF firmato
+                  {/* Su un rifiuto non esiste nessuna firma, e promettere un
+                      "PDF firmato" fa temere al cliente di aver accettato per
+                      sbaglio proprio mentre stava dicendo di no. */}
+                  {decisionResult.decision === 'accettata' ? 'Scarica il PDF firmato' : "Scarica il PDF dell'offerta"}
                 </Button>
               )}
             </CardContent>
@@ -527,7 +546,37 @@ const PublicOffer = () => {
               <p className="py-4 text-center text-sm text-muted-foreground">Nessuna riga in questa offerta.</p>
             ) : showLinePrices ? (
               <>
-                <div className="overflow-x-auto">
+                {/* Sul telefono la tabella a sei colonne non ci sta: sconto, IVA
+                    e totale di riga finivano fuori schermo dentro uno scroll
+                    orizzontale che nessun cliente scopre, perché la pagina
+                    scorre in verticale e niente segnala che quel blocco si
+                    sposta. Su schermo stretto ogni riga diventa una scheda, che
+                    si legge anche stampata. */}
+                <div className="space-y-3 sm:hidden">
+                  {lines.map((line, idx) => (
+                    <div key={idx} className="rounded-lg border p-3">
+                      <p className="font-medium">{line.description}</p>
+                      <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                        <dt className="text-muted-foreground">Quantità</dt>
+                        <dd className="text-right">{line.quantity}</dd>
+                        <dt className="text-muted-foreground">Prezzo unitario</dt>
+                        <dd className="text-right">{formatCurrency(line.unit_list_price)}</dd>
+                        {Number(line.discount_percentage) > 0 && (
+                          <>
+                            <dt className="text-muted-foreground">Sconto</dt>
+                            <dd className="text-right">{formatPercent(line.discount_percentage)}</dd>
+                          </>
+                        )}
+                        <dt className="text-muted-foreground">IVA</dt>
+                        <dd className="text-right">{formatPercent(line.vat_rate)}</dd>
+                        <dt className="font-medium">Totale</dt>
+                        <dd className="text-right font-medium">{formatCurrency(line.line_total)}</dd>
+                      </dl>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="hidden overflow-x-auto sm:block">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -675,8 +724,9 @@ const PublicOffer = () => {
               </div>
 
               <div className="space-y-2">
-                <Label>Firma</Label>
+                <Label htmlFor="firma-cliente">Firma *</Label>
                 <SignaturePad
+                  id="firma-cliente"
                   ref={sigRef}
                   disabled={submitting !== null}
                   onStrokeEnd={() => setHasSignature(true)}

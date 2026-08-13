@@ -13,6 +13,8 @@ interface SignaturePadProps {
   /** Notifica il genitore al primo tratto disegnato (per abilitare il pulsante di invio). */
   onStrokeEnd?: () => void;
   className?: string;
+  /** Serve a legare la <Label> del genitore al canvas, che altrimenti resta anonimo. */
+  id?: string;
 }
 
 // Canvas di firma senza librerie esterne (vincolo del blocco): pointer events
@@ -21,7 +23,7 @@ interface SignaturePadProps {
 // canvas.width in CSS pixel non coincide con i pixel fisici e il tratto esce
 // sfocato e disallineato rispetto al punto tenuto sotto il puntatore.
 export const SignaturePad = forwardRef<SignaturePadHandle, SignaturePadProps>(
-  ({ disabled, onStrokeEnd, className }, ref) => {
+  ({ disabled, onStrokeEnd, className, id }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const hasDrawnRef = useRef(false);
     const drawingRef = useRef(false);
@@ -133,6 +135,13 @@ export const SignaturePad = forwardRef<SignaturePadHandle, SignaturePadProps>(
         </span>
         <canvas
           ref={canvasRef}
+          id={id}
+          // Senza etichetta e senza fuoco da tastiera, per chi usa uno screen
+          // reader qui non c'è niente: e siccome l'accettazione richiede sempre
+          // una firma disegnata, la pagina diventa incompletabile da soli.
+          tabIndex={disabled ? -1 : 0}
+          aria-label="Area in cui disegnare la firma, obbligatoria per accettare l'offerta"
+          aria-disabled={disabled || undefined}
           className={cn(
             'h-[180px] w-full touch-none rounded-md border border-input bg-white',
             disabled ? 'cursor-not-allowed opacity-60' : 'cursor-crosshair'
