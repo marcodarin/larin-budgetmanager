@@ -152,6 +152,16 @@ function formatHashForDisplay(hash: string): string {
 // Sanificazione: WinAnsi copre le accentate italiane ma non ogni carattere
 // -----------------------------------------------------------------------------
 
+/**
+ * I font standard del PDF coprono WinAnsi, che basta per l'italiano ma non per
+ * la ř di Přemysl o per un nome cinese. Prima di rinunciare a un carattere si
+ * prova a toglierne i segni diacritici: "Přemysl" diventa "Premysl", che è
+ * leggibile e riconoscibile, mentre "P?emysl" non è né l'uno né l'altro.
+ *
+ * Per gli alfabeti non latini il ripiego resta il punto interrogativo: coprirli
+ * richiede di incorporare un font Unicode nel documento, che è la strada giusta
+ * quando servirà davvero e va deciso allora, non improvvisato qui.
+ */
 function sanitizeForPdf(text: string, font: PDFFont): string {
   try {
     font.encodeText(text);
@@ -162,9 +172,23 @@ function sanitizeForPdf(text: string, font: PDFFont): string {
       try {
         font.encodeText(ch);
         out += ch;
+        continue;
       } catch {
-        out += '?';
+        // il carattere non è rappresentabile: si tenta la forma senza accenti
       }
+
+      const senzaDiacritici = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+      if (senzaDiacritici && senzaDiacritici !== ch) {
+        try {
+          font.encodeText(senzaDiacritici);
+          out += senzaDiacritici;
+          continue;
+        } catch {
+          // nemmeno la forma base è rappresentabile
+        }
+      }
+
+      out += '?';
     }
     return out;
   }
@@ -372,6 +396,7 @@ function drawLinesSection(layout: Layout, snapshot: OfferSnapshot) {
       font: layout.fontBold,
       gap: 4,
     });
+    drawVatSummary(layout, snapshot);
     return;
   }
 
@@ -429,6 +454,47 @@ function drawLinesSection(layout: Layout, snapshot: OfferSnapshot) {
     'right',
   );
   layout.y -= 20;
+
+  drawVatSummary(layout, snapshot);
+}
+
+/**
+ * L'IVA sul documento che il cliente firma non è un dettaglio estetico: senza,
+ * si firma un importo senza sapere se è netto o lordo. Il dato sta nello
+ * snapshot per riga, quindi si espone da lì e non da un testo libero che
+ * qualcuno potrebbe dimenticare di scrivere.
+ *
+ * Con una sola aliquota si scrive la riga classica imponibile, IVA, totale. Con
+ * aliquote diverse si dettaglia per aliquota, perché sommarle darebbe un numero
+ * che non corrisponde a nessuna delle due.
+ */
+function drawVatSummary(layout: Layout, snapshot: OfferSnapshot) {
+  const lines = snapshot.lines ?? [];
+  if (lines.length === 0) return;
+
+  const imponibile = Number(snapshot.version.offered_total);
+  const aliquote = [...new Set(lines.map((l) => Number(l.vat_rate)))].sort((a, b) => a - b);
+
+  layout.spacer(4);
+
+  if (aliquote.length === 1) {
+    const aliquota = aliquote[0];
+    const iva = Math.round(imponibile * aliquota) / 100;
+    layout.line(
+      `Imponibile ${formatCurrency(imponibile)}, IVA ${formatPercentage(aliquota)} ${formatCurrency(iva)}, totale ${formatCurrency(imponibile + iva)}`,
+      { size: 9.5, font: layout.fontRegular, color: COLOR_GRAY, gap: 4 },
+    );
+    return;
+  }
+
+  // Più aliquote: il totale offerto è quello che il cliente accetta, e la
+  // ripartizione dell'imponibile fra aliquote diverse dipende da come si
+  // applica lo sconto complessivo. Si dichiara quello che è certo, senza
+  // inventare una ripartizione che nessuno ha deciso.
+  layout.line(
+    `Importi al netto di IVA, con aliquote ${aliquote.map((a) => formatPercentage(a)).join(' e ')} secondo le voci sopra.`,
+    { size: 9.5, font: layout.fontRegular, color: COLOR_GRAY, gap: 4 },
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -575,31 +641,50 @@ export async function generateSignedOfferPdf(
   field('Hash del documento firmato (SHA-256)', formatHashForDisplay(options.documentHash));
 
   layout.line('Firma', { size: 9, font: fontBold, color: COLOR_GRAY, gap: 6 });
-  const pngImage = await doc.embedPng(cert.signaturePngBytes);
-  const maxWidth = 220;
-  const maxHeight = 90;
-  const scale = Math.min(maxWidth / pngImage.width, maxHeight / pngImage.height, 1);
-  const imgWidth = pngImage.width * scale;
-  const imgHeight = pngImage.height * scale;
-  const padding = 10;
 
-  layout.ensureSpace(imgHeight + padding * 2 + 6);
-  const boxY = layout.y - imgHeight - padding * 2;
-  layout.page.drawRectangle({
-    x: MARGIN,
-    y: boxY,
-    width: imgWidth + padding * 2,
-    height: imgHeight + padding * 2,
-    borderColor: COLOR_LINE,
-    borderWidth: 1,
-  });
-  layout.page.drawImage(pngImage, {
-    x: MARGIN + padding,
-    y: boxY + padding,
-    width: imgWidth,
-    height: imgHeight,
-  });
-  layout.y = boxY - 10;
+  // L'immagine viene validata prima di essere accettata, ma se per qualunque
+  // ragione risultasse illeggibile qui, il certificato deve uscire lo stesso:
+  // la prova sta nell'hash e nei dati registrati, non nel disegno. Far fallire
+  // tutto il PDF lascerebbe l'offerta accettata e senza documento, che è il
+  // guasto peggiore fra i due.
+  let pngImage: Awaited<ReturnType<typeof doc.embedPng>> | null = null;
+  try {
+    pngImage = await doc.embedPng(cert.signaturePngBytes);
+  } catch (error) {
+    console.error('immagine della firma illeggibile, certificato senza tratto', error);
+  }
+
+  if (pngImage) {
+    const maxWidth = 220;
+    const maxHeight = 90;
+    const scale = Math.min(maxWidth / pngImage.width, maxHeight / pngImage.height, 1);
+    const imgWidth = pngImage.width * scale;
+    const imgHeight = pngImage.height * scale;
+    const padding = 10;
+
+    layout.ensureSpace(imgHeight + padding * 2 + 6);
+    const boxY = layout.y - imgHeight - padding * 2;
+    layout.page.drawRectangle({
+      x: MARGIN,
+      y: boxY,
+      width: imgWidth + padding * 2,
+      height: imgHeight + padding * 2,
+      borderColor: COLOR_LINE,
+      borderWidth: 1,
+    });
+    layout.page.drawImage(pngImage, {
+      x: MARGIN + padding,
+      y: boxY + padding,
+      width: imgWidth,
+      height: imgHeight,
+    });
+    layout.y = boxY - 10;
+  } else {
+    layout.paragraph(
+      "Il tratto della firma non è disponibile in forma grafica. La firma resta provata dai dati riportati sopra e dall'impronta del documento.",
+      { size: 9.5, gap: 6 },
+    );
+  }
 
   drawFooters(doc, fontRegular, options.documentHash);
 

@@ -29,6 +29,20 @@ function extractClientIp(req: Request): string | null {
   return first || null;
 }
 
+/** Firma tracciata a mano: un PNG di qualche decina di kilobyte, non di più. */
+const MAX_FIRMA_BYTE = 3 * 1024 * 1024;
+
+/** I primi otto byte di ogni PNG, per specifica. */
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/**
+ * Verificare che sia davvero un PNG non è pignoleria: senza questo controllo un
+ * file qualsiasi viene accettato come firma, l'offerta passa ad "accettata", e
+ * poi il PDF firmato non si genera mai perché la libreria non riesce a leggere
+ * l'immagine. A quel punto l'offerta è bloccata per sempre: c'è una sola
+ * accettazione ammessa per versione, quindi non si può nemmeno rifirmare, e
+ * l'unica uscita è aprire una revisione. Meglio un 400 subito.
+ */
 function decodeSignaturePng(dataUrl: unknown): Uint8Array {
   if (typeof dataUrl !== 'string') {
     throw new Error('Formato della firma non valido.');
@@ -37,9 +51,30 @@ function decodeSignaturePng(dataUrl: unknown): Uint8Array {
   if (!match) {
     throw new Error('Formato della firma non valido: atteso un PNG in data URL.');
   }
-  const binary = atob(match[1]);
+  // Il base64 cresce di un terzo rispetto ai byte: si controlla prima di
+  // decodificare, per non allocare comunque il file enorme.
+  if (match[1].length > MAX_FIRMA_BYTE * 1.4) {
+    throw new Error('La firma è troppo grande: riprova a tracciarla.');
+  }
+
+  let binary: string;
+  try {
+    binary = atob(match[1]);
+  } catch {
+    throw new Error('Formato della firma non valido: contenuto illeggibile.');
+  }
+
+  if (binary.length > MAX_FIRMA_BYTE) {
+    throw new Error('La firma è troppo grande: riprova a tracciarla.');
+  }
+
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+  if (bytes.length < PNG_MAGIC.length || PNG_MAGIC.some((b, i) => bytes[i] !== b)) {
+    throw new Error('Formato della firma non valido: il contenuto non è un PNG.');
+  }
+
   return bytes;
 }
 
@@ -334,8 +369,18 @@ async function handlePost(supabase: SupabaseClient, req: Request, clientIp: stri
 
   let signatureImagePath: string | null = null;
   if (action === 'accept') {
+    // La validazione va prima e per conto suo: se la firma non è un PNG buono,
+    // il cliente deve saperlo con un messaggio che dice cosa fare, e soprattutto
+    // niente deve essere ancora stato scritto.
+    let pngBytes: Uint8Array;
     try {
-      const pngBytes = decodeSignaturePng(body.signature_png);
+      pngBytes = decodeSignaturePng(body.signature_png);
+    } catch (error) {
+      const messaggio = error instanceof Error ? error.message : 'Formato della firma non valido.';
+      return json(400, { error: `${messaggio} Riprova a firmare, oppure scrivi al tuo referente.` });
+    }
+
+    try {
       signatureImagePath = `signatures/${offerVersionId}/${crypto.randomUUID()}.png`;
       const { error: uploadError } = await supabase.storage
         .from(DOCUMENTS_BUCKET)
