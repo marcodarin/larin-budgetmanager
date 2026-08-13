@@ -3859,6 +3859,17 @@ export type Database = {
           id: string
         }[]
       }
+      get_offer_approval_thresholds: {
+        Args: never
+        Returns: {
+          amount_threshold: number
+          discount_threshold_percentage: number
+        }[]
+      }
+      get_offer_version_effective_discount_percentage: {
+        Args: { _offer_version_id: string }
+        Returns: number
+      }
       get_profiles_by_roles: {
         Args: { role_filter: Database["public"]["Enums"]["app_role"][] }
         Returns: {
@@ -3936,6 +3947,28 @@ export type Database = {
       merge_clients: {
         Args: { drop_id: string; final_name?: string; keep_id: string }
         Returns: Json
+      }
+      notify_offer_approval_outcome: {
+        Args: { _approved: boolean; _offer_version_id: string; _reason: string }
+        Returns: undefined
+      }
+      notify_offer_approval_required: {
+        Args: { _offer_version_id: string; _reason: string }
+        Returns: undefined
+      }
+      notify_user_if_enabled: {
+        Args: {
+          _message: string
+          _project_id?: string
+          _title: string
+          _type: string
+          _user_id: string
+        }
+        Returns: undefined
+      }
+      offer_version_requires_approval: {
+        Args: { _offer_version_id: string }
+        Returns: boolean
       }
       recalculate_all_pack_projects_progress: {
         Args: never

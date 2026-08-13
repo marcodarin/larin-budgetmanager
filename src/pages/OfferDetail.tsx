@@ -21,6 +21,7 @@ import {
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { hasPermission } from '@/lib/permissions';
 import { OfferStatusSelector, offerStatusConfig } from '@/components/OfferStatusSelector';
+import { OfferPaymentPlanSection } from '@/components/OfferPaymentPlanSection';
 import type { Database } from '@/integrations/supabase/types';
 
 type OfferLineRow = Database['public']['Tables']['offer_lines']['Row'];
@@ -352,7 +353,7 @@ const OfferDetail = () => {
       {selectedVersion && !isBozza && (
         <Alert>
           <AlertDescription>
-            Questa versione è in stato "{offerStatusConfig[selectedVersion.status].label}": righe e totali non sono più modificabili. Per applicare modifiche al contenuto serve una nuova versione.
+            Questa versione è in stato "{offerStatusConfig[selectedVersion.status].label}": righe, totali e le tranche del piano di pagamento non sono più modificabili (la maturazione delle tranche resta registrabile). Per applicare modifiche al contenuto serve una nuova versione.
           </AlertDescription>
         </Alert>
       )}
@@ -512,6 +513,17 @@ const OfferDetail = () => {
           )}
         </CardContent>
       </Card>
+
+      {selectedVersion && (
+        <OfferPaymentPlanSection
+          offerVersionId={selectedVersion.id}
+          offeredTotal={offeredTotalValue}
+          billingMode={selectedVersion.billing_mode}
+          canManage={canManage}
+          isBozza={isBozza}
+          onBillingModeChange={refetchVersions}
+        />
+      )}
 
       <Dialog open={showAddLineDialog} onOpenChange={(open) => { setShowAddLineDialog(open); if (!open) resetAddLineForm(); }}>
         <DialogContent>
