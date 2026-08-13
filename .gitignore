@@ -26,3 +26,4 @@ dist-ssr
 # Ambienti locali (staging): mai committare, il repo è pubblico
 .env.local
 .env.*.local
+test-results/
