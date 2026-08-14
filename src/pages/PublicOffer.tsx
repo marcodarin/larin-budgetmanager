@@ -3,15 +3,11 @@ import { useParams } from 'react-router-dom';
 import { addDays, endOfMonth, format, parseISO } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { toast } from 'sonner';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Badge } from '@/components/ui/badge';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,10 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import {
-  FileText, Building2, Download, Printer, CheckCircle2, XCircle,
-  AlertCircle, Loader2, RefreshCw, CalendarClock,
-} from 'lucide-react';
+import { Download, Printer, CheckCircle2, XCircle, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import { SignaturePad, type SignaturePadHandle } from '@/components/offers/SignaturePad';
 
 // La pagina pubblica non usa mai il client Supabase autenticato (il cliente
@@ -110,13 +103,6 @@ interface DecisionResult {
   decision: 'accettata' | 'rifiutata';
   pdfUrl: string | null;
 }
-
-const billingModeLabels: Record<BillingMode, string> = {
-  importo_finito: 'Importo finito',
-  ricorrente: 'Ricorrente',
-  a_giornate: 'A giornate',
-  tetto_di_spesa: 'Tetto di spesa',
-};
 
 const dueBasisLabels: Record<PaymentTermDueBasis, string> = {
   data_documento: 'data documento',
@@ -212,12 +198,6 @@ function describeTranche(entry: PaymentPlanEntrySnapshot): string {
   }
 
   return `${value} ${eventText}${termText}${dueText}.`;
-}
-
-function validityBadgeClass(daysLeft: number): string {
-  if (daysLeft <= 0) return 'bg-destructive/10 text-destructive border-destructive/30';
-  if (daysLeft <= 7) return 'bg-yellow-500/10 text-yellow-700 border-yellow-500/30 dark:text-yellow-400';
-  return 'bg-green-500/10 text-green-700 border-green-500/30 dark:text-green-400';
 }
 
 const PublicOffer = () => {
@@ -438,55 +418,72 @@ const PublicOffer = () => {
   const daysLeft = validUntilDate ? Math.ceil((validUntilDate.getTime() - Date.now()) / 86400000) : null;
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="mx-auto max-w-3xl space-y-6 p-4 md:p-8">
-        {/* Intestazione */}
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="mb-1 flex items-center gap-2">
-              <FileText className="h-7 w-7 text-primary" />
-              <h1 className="text-2xl font-bold md:text-3xl">Offerta {doc.offer.reference}</h1>
-              <Badge variant="outline">v{doc.version.version_number}</Badge>
-            </div>
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Building2 className="h-4 w-4" />
-              <span>{doc.client.name}</span>
-            </div>
-          </div>
+    <div className="min-h-screen bg-[#F5F4F1] font-sans text-[#21282A] antialiased">
+      {/* Barra di marca: il cliente sta leggendo un documento di Larin, non una
+          schermata del gestionale. Da qui in giù la pagina non usa il tema
+          dell'applicazione interna. */}
+      <header className="border-b border-[#E2E1DC] print:border-none">
+        <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-5">
+          <LarinMark />
           <div className="flex gap-2 print:hidden">
-            <Button variant="outline" size="sm" onClick={() => window.print()}>
-              <Printer className="mr-2 h-4 w-4" />
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="inline-flex items-center gap-2 rounded-full border border-[#D6D5CF] px-4 py-2 text-[13px] transition-colors hover:border-[#4E5758] hover:bg-white"
+            >
+              <Printer className="h-3.5 w-3.5" />
               Stampa
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleDownloadPdf} disabled={pdfLoading}>
-              {pdfLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadPdf}
+              disabled={pdfLoading}
+              className="inline-flex items-center gap-2 rounded-full border border-[#D6D5CF] px-4 py-2 text-[13px] transition-colors hover:border-[#4E5758] hover:bg-white disabled:opacity-50"
+            >
+              {pdfLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
               Scarica PDF
-            </Button>
+            </button>
           </div>
         </div>
+      </header>
 
-        {validUntilDate && daysLeft !== null && (
-          <div className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${validityBadgeClass(daysLeft)}`}>
-            <CalendarClock className="h-3 w-3" />
-            {daysLeft <= 0
-              ? `Validità scaduta il ${format(validUntilDate, 'dd/MM/yyyy', { locale: it })}`
-              : `Offerta valida fino al ${format(validUntilDate, 'dd/MM/yyyy', { locale: it })}`}
-          </div>
-        )}
+      <main className="mx-auto max-w-3xl px-6 pb-24">
+        {/* Apertura: l'etichetta minuta e il riferimento grande e leggero sono
+            il ritmo tipografico delle presentazioni Larin. */}
+        <section className="animate-in fade-in slide-in-from-bottom-2 duration-500 pt-12 pb-10">
+          <Etichetta>Offerta commerciale</Etichetta>
+          <h1 className="mt-3 text-[2.5rem] font-light leading-[1.05] tracking-tight md:text-[3.25rem]">
+            Offerta <span className="font-medium">{doc.offer.reference}</span>
+            <span className="ml-3 align-middle text-base font-normal text-[#8A9092]">v{doc.version.version_number}</span>
+          </h1>
+          <p className="mt-4 text-lg text-[#4E5758]">{doc.client.name}</p>
+
+          {validUntilDate && daysLeft !== null && (
+            <p className="mt-6 flex items-center gap-3 text-sm text-[#6B7274]">
+              <span
+                aria-hidden
+                className={`inline-block h-[3px] w-10 ${daysLeft <= 0 ? 'bg-[#C1502E]' : 'bg-[#F7DB45]'}`}
+              />
+              {daysLeft <= 0
+                ? `Validità scaduta il ${format(validUntilDate, 'dd MMMM yyyy', { locale: it })}`
+                : `Offerta valida fino al ${format(validUntilDate, 'dd MMMM yyyy', { locale: it })}`}
+            </p>
+          )}
+        </section>
 
         {/* Conferma della decisione appena presa in questa sessione */}
         {decisionResult && (
-          <Card variant="static" className="border-primary/40">
-            <CardContent className="flex flex-col gap-3 pt-6 sm:flex-row sm:items-start sm:justify-between">
+          <section className="animate-in fade-in slide-in-from-bottom-2 mb-10 border-l-2 border-[#F7DB45] bg-white px-6 py-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3">
                 {decisionResult.decision === 'accettata'
-                  ? <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0 text-green-600" />
-                  : <XCircle className="mt-0.5 h-6 w-6 shrink-0 text-muted-foreground" />}
+                  ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-[#4E5758]" />
+                  : <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-[#8A9092]" />}
                 <div>
-                  <p className="font-semibold">
+                  <p className="font-medium">
                     {decisionResult.decision === 'accettata' ? 'Offerta accettata e firmata' : 'Offerta rifiutata'}
                   </p>
-                  <p className="text-sm text-muted-foreground">
+                  <p className="mt-1 text-sm text-[#6B7274]">
                     {decisionResult.decision === 'accettata'
                       ? `Grazie ${signerName.trim()}, abbiamo registrato la tua firma. Riceverai anche una copia via email.`
                       : 'Abbiamo registrato la tua risposta. Il tuo referente ne sarà informato.'}
@@ -494,294 +491,309 @@ const PublicOffer = () => {
                 </div>
               </div>
               {decisionResult.pdfUrl && (
-                <Button size="sm" onClick={() => window.open(decisionResult.pdfUrl!, '_blank', 'noopener,noreferrer')} className="print:hidden">
-                  <Download className="mr-2 h-4 w-4" />
+                <button
+                  type="button"
+                  onClick={() => window.open(decisionResult.pdfUrl!, '_blank', 'noopener,noreferrer')}
+                  className="inline-flex shrink-0 items-center gap-2 rounded-full bg-[#21282A] px-5 py-2.5 text-[13px] text-white transition-opacity hover:opacity-90 print:hidden"
+                >
+                  <Download className="h-3.5 w-3.5" />
                   {/* Su un rifiuto non esiste nessuna firma, e promettere un
                       "PDF firmato" fa temere al cliente di aver accettato per
                       sbaglio proprio mentre stava dicendo di no. */}
                   {decisionResult.decision === 'accettata' ? 'Scarica il PDF firmato' : "Scarica il PDF dell'offerta"}
-                </Button>
+                </button>
               )}
-            </CardContent>
-          </Card>
+            </div>
+          </section>
         )}
 
         {/* Decisione già registrata in una sessione precedente */}
         {!decisionResult && data.signature && (
-          <Card variant="static">
-            <CardContent className="flex items-start gap-3 pt-6">
+          <section className="mb-10 border-l-2 border-[#D6D5CF] bg-white px-6 py-5">
+            <div className="flex items-start gap-3">
               {data.signature.decision === 'accettata'
-                ? <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0 text-green-600" />
-                : <XCircle className="mt-0.5 h-6 w-6 shrink-0 text-muted-foreground" />}
+                ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-[#4E5758]" />
+                : <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-[#8A9092]" />}
               <div>
-                <p className="font-semibold">
+                <p className="font-medium">
                   {data.signature.decision === 'accettata' ? 'Offerta accettata e firmata' : 'Offerta rifiutata'}
                 </p>
-                <p className="text-sm text-muted-foreground">
+                <p className="mt-1 text-sm text-[#6B7274]">
                   {data.signature.signer_name}
-                  {data.signature.signer_role ? ` (${data.signature.signer_role})` : ''}, il{' '}
-                  {format(new Date(data.signature.signed_at), "dd/MM/yyyy 'alle' HH:mm", { locale: it })}
+                  {data.signature.signer_role ? ` (${data.signature.signer_role})` : ''}
+                  {`, il ${format(parseISO(data.signature.signed_at), "dd/MM/yyyy 'alle' HH:mm", { locale: it })}`}
                 </p>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </section>
         )}
 
-        {/* Motivo per cui l'offerta non è (più) firmabile, quando non c'è già una firma da mostrare */}
-        {!decisionResult && !data.signature && !data.signable && data.not_signable_reason && (
-          <Alert>
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Non firmabile</AlertTitle>
-            <AlertDescription>{data.not_signable_reason}</AlertDescription>
-          </Alert>
+        {!effectiveSignable && !decisionResult && !data.signature && data.not_signable_reason && (
+          <section className="mb-10 flex items-start gap-3 border-l-2 border-[#D6D5CF] bg-white px-6 py-5">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-[#8A9092]" />
+            <p className="text-sm text-[#4E5758]">{data.not_signable_reason}</p>
+          </section>
         )}
 
-        {/* Composizione dell'offerta */}
-        <Card variant="static">
-          <CardHeader>
-            <CardTitle>Composizione dell'offerta</CardTitle>
-          </CardHeader>
-          <CardContent>
+        {/* Il documento: un foglio bianco che galleggia sul fondo caldo, con le
+            sezioni separate da aria e filetti invece che da riquadri. */}
+        <article className="animate-in fade-in slide-in-from-bottom-2 duration-700 bg-white px-6 py-10 shadow-[0_1px_2px_rgba(33,40,42,0.04),0_8px_32px_-16px_rgba(33,40,42,0.12)] md:px-12">
+          <Sezione titolo="Composizione dell'offerta">
             {lines.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted-foreground">Nessuna riga in questa offerta.</p>
+              <p className="text-sm text-[#8A9092]">Nessuna riga in questa offerta.</p>
             ) : showLinePrices ? (
               <>
                 {/* Sul telefono la tabella a sei colonne non ci sta: sconto, IVA
                     e totale di riga finivano fuori schermo dentro uno scroll
-                    orizzontale che nessun cliente scopre, perché la pagina
-                    scorre in verticale e niente segnala che quel blocco si
-                    sposta. Su schermo stretto ogni riga diventa una scheda, che
-                    si legge anche stampata. */}
-                <div className="space-y-3 sm:hidden">
+                    orizzontale che nessun cliente scopre. Su schermo stretto
+                    ogni riga diventa una scheda, che si legge anche stampata. */}
+                <div className="divide-y divide-[#EFEEE9] sm:hidden">
                   {lines.map((line, idx) => (
-                    <div key={idx} className="rounded-lg border p-3">
-                      <p className="font-medium">{line.description}</p>
-                      <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                        <dt className="text-muted-foreground">Quantità</dt>
-                        <dd className="text-right">{line.quantity}</dd>
-                        <dt className="text-muted-foreground">Prezzo unitario</dt>
-                        <dd className="text-right">{formatCurrency(line.unit_list_price)}</dd>
+                    <div key={idx} className="py-4 first:pt-0">
+                      <p className="font-medium leading-snug">{line.description}</p>
+                      <dl className="mt-3 space-y-1.5 text-sm">
+                        <div className="flex justify-between">
+                          <dt className="text-[#8A9092]">Quantità</dt>
+                          <dd className="tabular-nums">{line.quantity}</dd>
+                        </div>
+                        <div className="flex justify-between">
+                          <dt className="text-[#8A9092]">Prezzo unitario</dt>
+                          <dd className="tabular-nums">{formatCurrency(line.unit_list_price)}</dd>
+                        </div>
                         {Number(line.discount_percentage) > 0 && (
-                          <>
-                            <dt className="text-muted-foreground">Sconto</dt>
-                            <dd className="text-right">{formatPercent(line.discount_percentage)}</dd>
-                          </>
+                          <div className="flex justify-between">
+                            <dt className="text-[#8A9092]">Sconto</dt>
+                            <dd className="tabular-nums">{formatPercent(line.discount_percentage)}</dd>
+                          </div>
                         )}
-                        <dt className="text-muted-foreground">IVA</dt>
-                        <dd className="text-right">{formatPercent(line.vat_rate)}</dd>
-                        <dt className="font-medium">Totale</dt>
-                        <dd className="text-right font-medium">{formatCurrency(line.line_total)}</dd>
+                        <div className="flex justify-between">
+                          <dt className="text-[#8A9092]">IVA</dt>
+                          <dd className="tabular-nums">{formatPercent(line.vat_rate)}</dd>
+                        </div>
+                        <div className="flex justify-between border-t border-[#EFEEE9] pt-1.5 font-medium">
+                          <dt>Totale</dt>
+                          <dd className="tabular-nums">{formatCurrency(line.line_total)}</dd>
+                        </div>
                       </dl>
                     </div>
                   ))}
                 </div>
 
-                <div className="hidden overflow-x-auto sm:block">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Descrizione</TableHead>
-                        <TableHead className="text-right">Quantità</TableHead>
-                        <TableHead className="text-right">Prezzo unitario</TableHead>
-                        <TableHead className="text-right">Sconto</TableHead>
-                        <TableHead className="text-right">IVA</TableHead>
-                        <TableHead className="text-right">Totale</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {lines.map((line, idx) => (
-                        <TableRow key={idx}>
-                          <TableCell className="font-medium">{line.description}</TableCell>
-                          <TableCell className="text-right">{line.quantity}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(line.unit_list_price)}</TableCell>
-                          <TableCell className="text-right">{formatPercent(line.discount_percentage)}</TableCell>
-                          <TableCell className="text-right">{formatPercent(line.vat_rate)}</TableCell>
-                          <TableCell className="text-right font-medium">{formatCurrency(line.line_total)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                <table className="hidden w-full text-sm sm:table">
+                  <thead>
+                    <tr className="border-b border-[#E2E1DC] text-left">
+                      <th className="pb-3 pr-4 text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">Descrizione</th>
+                      <th className="pb-3 px-3 text-right text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">Qtà</th>
+                      <th className="pb-3 px-3 text-right text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">Prezzo</th>
+                      <th className="pb-3 px-3 text-right text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">Sconto</th>
+                      <th className="pb-3 px-3 text-right text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">IVA</th>
+                      <th className="pb-3 pl-3 text-right text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">Totale</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#F1F0EC]">
+                    {lines.map((line, idx) => (
+                      <tr key={idx}>
+                        <td className="py-4 pr-4 leading-snug">{line.description}</td>
+                        <td className="py-4 px-3 text-right tabular-nums">{line.quantity}</td>
+                        <td className="py-4 px-3 text-right tabular-nums">{formatCurrency(line.unit_list_price)}</td>
+                        <td className="py-4 px-3 text-right tabular-nums text-[#8A9092]">
+                          {Number(line.discount_percentage) > 0 ? formatPercent(line.discount_percentage) : '–'}
+                        </td>
+                        <td className="py-4 px-3 text-right tabular-nums text-[#8A9092]">{formatPercent(line.vat_rate)}</td>
+                        <td className="py-4 pl-3 text-right font-medium tabular-nums">{formatCurrency(line.line_total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
                 {/* Totale di listino e sconto effettivo restano fuori: sono
                     numeri nostri, servono alle soglie di approvazione e alla
                     statistica interna. Dirli al cliente sposta la trattativa
                     sullo sconto invece che sul valore, e il PDF che firma non
                     li riporta: le due cose devono coincidere. */}
-                <div className="mt-4 flex justify-between border-t pt-4 text-lg font-bold">
-                  <span>Totale offerto</span>
-                  <span>{formatCurrency(doc.version.offered_total)}</span>
-                </div>
+                <Totale valore={doc.version.offered_total} />
               </>
             ) : (
               <>
-                {/* Prezzo unico omnicomprensivo: niente prezzi di riga, solo
-                    il perimetro (vedi commento sopra sulla regola). */}
-                <ul className="list-disc space-y-1.5 pl-5 text-sm">
+                {/* Prezzo unico omnicomprensivo: si elencano le voci comprese,
+                    senza i prezzi di riga che non sommerebbero al totale. */}
+                <ul className="space-y-3">
                   {lines.map((line, idx) => (
-                    <li key={idx}>{line.description}</li>
+                    <li key={idx} className="flex gap-3 leading-snug">
+                      <span aria-hidden className="mt-[9px] h-1 w-1 shrink-0 rounded-full bg-[#4E5758]" />
+                      <span>{line.description}</span>
+                    </li>
                   ))}
                 </ul>
-                <p className="mt-3 text-xs text-muted-foreground">Prezzo complessivo per l'intero pacchetto descritto sopra.</p>
-                <div className="mt-4 flex justify-between border-t pt-4 text-lg font-bold">
-                  <span>Totale offerto</span>
-                  <span>{formatCurrency(doc.version.offered_total)}</span>
-                </div>
+                <p className="mt-4 text-sm text-[#8A9092]">Prezzo complessivo per l'intero pacchetto descritto sopra.</p>
+                <Totale valore={doc.version.offered_total} />
               </>
             )}
-          </CardContent>
-        </Card>
+          </Sezione>
 
-        {/* Piano di pagamento */}
-        <Card variant="static">
-          <CardHeader>
-            <CardTitle>Piano di pagamento</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="mb-3 text-sm text-muted-foreground">
-              Modalità di fatturazione: {billingModeLabels[doc.version.billing_mode]}
-            </p>
-            {paymentPlan.length === 0 ? (
-              <p className="py-2 text-sm text-muted-foreground">Il pagamento non è suddiviso in tranche.</p>
-            ) : (
-              <ol className="space-y-2">
+          {paymentPlan.length > 0 && (
+            <Sezione titolo="Piano di pagamento">
+              {/* Il marchio di Larin sono tre punti connessi: le tranche sono
+                  letteralmente punti su una linea, quindi il piano di pagamento
+                  si legge come una sequenza e non come un elenco. Il primo
+                  punto è pieno, perché è quello che viene per primo. */}
+              <ol className="relative space-y-6 pl-8">
+                <span aria-hidden className="absolute left-[5px] top-2 bottom-2 w-px bg-[#E2E1DC]" />
                 {paymentPlan.map((entry, idx) => (
-                  <li key={idx} className="flex gap-2 text-sm">
-                    <span className="font-semibold text-muted-foreground">{idx + 1}.</span>
-                    <span>{describeTranche(entry)}</span>
+                  <li key={idx} className="relative leading-relaxed">
+                    <span
+                      aria-hidden
+                      className={`absolute -left-8 top-[7px] h-[11px] w-[11px] rounded-full border-2 ${
+                        idx === 0 ? 'border-[#4E5758] bg-[#4E5758]' : 'border-[#B9BDBE] bg-white'
+                      }`}
+                    />
+                    {describeTranche(entry)}
                   </li>
                 ))}
               </ol>
-            )}
-            {doc.version.payment_terms_text && (
-              <p className="mt-3 whitespace-pre-wrap text-sm text-muted-foreground">{doc.version.payment_terms_text}</p>
-            )}
-          </CardContent>
-        </Card>
+            </Sezione>
+          )}
 
-        {/* Condizioni */}
-        {hasTerms && (
-          <Card variant="static">
-            <CardHeader>
-              <CardTitle>Condizioni generali e specifiche</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm">
-              {doc.terms.general.trim().length > 0 && (
-                <p className="whitespace-pre-wrap">{doc.terms.general}</p>
+          {doc.version.payment_terms_text && (
+            <Sezione titolo="Note di pagamento">
+              <p className="whitespace-pre-line leading-relaxed">{doc.version.payment_terms_text}</p>
+            </Sezione>
+          )}
+
+          {hasTerms && (
+            <Sezione titolo="Condizioni">
+              {doc.terms.general.trim() && (
+                <p className="whitespace-pre-line leading-relaxed text-[#4E5758]">{doc.terms.general}</p>
               )}
               {doc.terms.specific.length > 0 && (
-                <div className="space-y-2 border-t pt-3">
+                <div className="mt-6 space-y-5">
                   {doc.terms.specific.map((t, idx) => (
-                    <p key={idx}>
-                      <span className="font-medium">{t.product_name}: </span>
-                      <span className="whitespace-pre-wrap text-muted-foreground">{t.text}</span>
-                    </p>
+                    <div key={idx}>
+                      <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">{t.product_name}</p>
+                      <p className="mt-1.5 whitespace-pre-line leading-relaxed text-[#4E5758]">{t.text}</p>
+                    </div>
                   ))}
                 </div>
               )}
-            </CardContent>
-          </Card>
-        )}
+            </Sezione>
+          )}
+        </article>
 
-        {/* Accettazione / rifiuto */}
+        {/* Accettazione e firma */}
         {effectiveSignable && (
-          <Card variant="static" className="print:hidden">
-            <CardHeader>
-              <CardTitle>Accetta o rifiuta questa offerta</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="signer-name">Nome e cognome *</Label>
-                  <Input
-                    id="signer-name"
-                    value={signerName}
-                    onChange={(e) => setSignerName(e.target.value)}
-                    placeholder="Mario Rossi"
-                    disabled={submitting !== null}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signer-role">Ruolo</Label>
-                  <Input
-                    id="signer-role"
-                    value={signerRole}
-                    onChange={(e) => setSignerRole(e.target.value)}
-                    placeholder="Es. Amministratore delegato"
-                    disabled={submitting !== null}
-                  />
-                </div>
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="signer-email">Email</Label>
-                  <Input
-                    id="signer-email"
-                    type="email"
-                    value={signerEmail}
-                    onChange={(e) => setSignerEmail(e.target.value)}
-                    placeholder="mario.rossi@azienda.it"
-                    disabled={submitting !== null}
-                  />
-                </div>
-              </div>
+          <section className="animate-in fade-in slide-in-from-bottom-2 duration-700 mt-10 bg-white px-6 py-10 shadow-[0_1px_2px_rgba(33,40,42,0.04),0_8px_32px_-16px_rgba(33,40,42,0.12)] md:px-12 print:hidden">
+            <Etichetta>Accettazione</Etichetta>
+            <h2 className="mt-3 text-2xl font-light">Accetta o rifiuta questa offerta</h2>
 
+            <div className="mt-8 grid gap-5 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="firma-cliente">Firma *</Label>
-                <SignaturePad
-                  id="firma-cliente"
-                  ref={sigRef}
-                  disabled={submitting !== null}
-                  onStrokeEnd={() => setHasSignature(true)}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => { sigRef.current?.clear(); setHasSignature(false); }}
-                  disabled={submitting !== null}
-                >
-                  Cancella firma
-                </Button>
-              </div>
-
-              <div className="flex items-start gap-2">
-                <Checkbox
-                  id="accept-terms"
-                  checked={acceptChecked}
-                  onCheckedChange={(checked) => setAcceptChecked(checked === true)}
-                  disabled={submitting !== null}
-                  className="mt-0.5"
-                />
-                <Label htmlFor="accept-terms" className="text-sm font-normal leading-snug">
-                  Dichiaro di aver letto e accettato le condizioni generali e specifiche riportate sopra.
+                <Label htmlFor="signer-name" className="text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">
+                  Nome e cognome *
                 </Label>
-              </div>
-
-              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="text-destructive hover:text-destructive"
-                  onClick={handleRejectClick}
+                <Input
+                  id="signer-name"
+                  value={signerName}
+                  onChange={(e) => setSignerName(e.target.value)}
+                  placeholder="Mario Rossi"
                   disabled={submitting !== null}
-                >
-                  Rifiuta l'offerta
-                </Button>
-                <Button
-                  type="button"
-                  onClick={handleAcceptClick}
-                  disabled={submitting !== null || !signerName.trim() || !acceptChecked || !hasSignature}
-                >
-                  {submitting === 'accept' && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Accetta e firma
-                </Button>
+                  className="h-11 rounded-none border-0 border-b border-[#D6D5CF] bg-transparent px-0 text-base focus-visible:border-[#4E5758] focus-visible:ring-0"
+                />
               </div>
-            </CardContent>
-          </Card>
+              <div className="space-y-2">
+                <Label htmlFor="signer-role" className="text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">
+                  Ruolo
+                </Label>
+                <Input
+                  id="signer-role"
+                  value={signerRole}
+                  onChange={(e) => setSignerRole(e.target.value)}
+                  placeholder="Es. Amministratore delegato"
+                  disabled={submitting !== null}
+                  className="h-11 rounded-none border-0 border-b border-[#D6D5CF] bg-transparent px-0 text-base focus-visible:border-[#4E5758] focus-visible:ring-0"
+                />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="signer-email" className="text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">
+                  Email
+                </Label>
+                <Input
+                  id="signer-email"
+                  type="email"
+                  value={signerEmail}
+                  onChange={(e) => setSignerEmail(e.target.value)}
+                  placeholder="mario.rossi@azienda.it"
+                  disabled={submitting !== null}
+                  className="h-11 rounded-none border-0 border-b border-[#D6D5CF] bg-transparent px-0 text-base focus-visible:border-[#4E5758] focus-visible:ring-0"
+                />
+              </div>
+            </div>
+
+            <div className="mt-8 space-y-2">
+              <Label htmlFor="firma-cliente" className="text-[11px] font-medium uppercase tracking-[0.14em] text-[#8A9092]">
+                Firma *
+              </Label>
+              <SignaturePad
+                id="firma-cliente"
+                ref={sigRef}
+                disabled={submitting !== null}
+                onStrokeEnd={() => setHasSignature(true)}
+              />
+              <button
+                type="button"
+                onClick={() => { sigRef.current?.clear(); setHasSignature(false); }}
+                disabled={submitting !== null}
+                className="text-[13px] text-[#8A9092] underline underline-offset-4 transition-colors hover:text-[#21282A] disabled:opacity-50"
+              >
+                Cancella firma
+              </button>
+            </div>
+
+            <div className="mt-8 flex items-start gap-3">
+              <Checkbox
+                id="accept-terms"
+                checked={acceptChecked}
+                onCheckedChange={(checked) => setAcceptChecked(checked === true)}
+                disabled={submitting !== null}
+                className="mt-0.5"
+              />
+              <Label htmlFor="accept-terms" className="text-sm font-normal leading-snug text-[#4E5758]">
+                Dichiaro di aver letto e accettato le condizioni generali e specifiche riportate sopra.
+              </Label>
+            </div>
+
+            <div className="mt-8 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={handleRejectClick}
+                disabled={submitting !== null}
+                className="rounded-full border border-[#D6D5CF] px-6 py-3 text-sm text-[#6B7274] transition-colors hover:border-[#C1502E] hover:text-[#C1502E] disabled:opacity-50"
+              >
+                Rifiuta l'offerta
+              </button>
+              <button
+                type="button"
+                onClick={handleAcceptClick}
+                disabled={submitting !== null || !signerName.trim() || !acceptChecked || !hasSignature}
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-[#21282A] px-8 py-3 text-sm text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {submitting === 'accept' && <Loader2 className="h-4 w-4 animate-spin" />}
+                Accetta e firma
+              </button>
+            </div>
+          </section>
         )}
 
-        <p className="pb-4 text-center text-xs text-muted-foreground">
-          Documento generato automaticamente da Larin. Per domande contatta il tuo referente.
-        </p>
-      </div>
+        <footer className="mt-12 flex items-center justify-between gap-4 text-[11px] text-[#8A9092]">
+          <span>Documento generato da Larin. Per domande contatta il tuo referente.</span>
+          <span aria-hidden className="hidden shrink-0 items-center gap-1 sm:flex">
+            <span className="h-1 w-1 rounded-full bg-[#C9CCCD]" />
+            <span className="h-px w-4 bg-[#E2E1DC]" />
+            <span className="h-1.5 w-1.5 rounded-full bg-[#B9BDBE]" />
+            <span className="h-px w-4 bg-[#E2E1DC]" />
+            <span className="h-1 w-1 rounded-full bg-[#C9CCCD]" />
+          </span>
+        </footer>
+      </main>
 
       {/* Conferma di rifiuto: un click involontario non deve poter annullare
           una risposta al cliente, quindi passa sempre da qui. */}
@@ -804,7 +816,7 @@ const PublicOffer = () => {
             <AlertDialogAction
               onClick={(e) => { e.preventDefault(); handleRejectConfirm(); }}
               disabled={submitting !== null}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-[#21282A] text-white hover:bg-[#21282A]/90"
             >
               {submitting === 'reject' && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Conferma rifiuto
@@ -816,30 +828,82 @@ const PublicOffer = () => {
   );
 };
 
-// Schermata unica per tutti gli esiti che non mostrano il documento
-// (revocato, scaduto, non trovato, documento assente, o un errore di rete):
-// un cliente che vede una pagina bianca o un errore tecnico è il modo più
-// efficace di perdere una vendita, quindi ognuno ha un messaggio in italiano
-// che dice cosa fare, più un modo per riprovare.
+/**
+ * Il marchio: un anello sottile con tre punti in colonna, piccolo grande
+ * piccolo. Disegnato in SVG e non caricato come immagine, così resta nitido a
+ * ogni dimensione, si stampa bene e non aggiunge una richiesta di rete a una
+ * pagina che il cliente aprirà spesso da rete mobile.
+ */
+const LarinMark = () => (
+  <div className="flex items-center gap-3">
+    <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden className="shrink-0">
+      <circle cx="15" cy="15" r="13" fill="none" stroke="#4E5758" strokeWidth="1.7" />
+      <circle cx="15" cy="9.4" r="1.55" fill="#4E5758" />
+      <circle cx="15" cy="15" r="2.5" fill="#4E5758" />
+      <circle cx="15" cy="20.6" r="1.55" fill="#4E5758" />
+    </svg>
+    <div className="leading-none">
+      <p className="text-[15px] font-semibold tracking-[0.22em] text-[#4E5758]">LARIN</p>
+      {/* Il payoff sparisce sotto i 380px: andrebbe a capo spezzato in due
+          righe, che è peggio del non averlo. */}
+      <p className="mt-1 hidden whitespace-nowrap text-[8px] font-medium tracking-[0.28em] text-[#A6ABAC] min-[380px]:block">
+        CONNECT THE DOTS
+      </p>
+    </div>
+  </div>
+);
+
+/** Etichetta minuta in maiuscolo: il ritmo tipografico delle presentazioni. */
+const Etichetta = ({ children }: { children: React.ReactNode }) => (
+  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-[#8A9092]">{children}</p>
+);
+
+/** Sezione del documento: separata da aria e da un filetto, non da un riquadro. */
+const Sezione = ({ titolo, children }: { titolo: string; children: React.ReactNode }) => (
+  <section className="border-t border-[#E2E1DC] pt-8 first:border-t-0 first:pt-0 [&+section]:mt-10">
+    <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-[#8A9092]">{titolo}</h2>
+    <div className="mt-5">{children}</div>
+  </section>
+);
+
+/** Il totale è l'unico numero che il cliente deve ricordare: sta da solo. */
+const Totale = ({ valore }: { valore: number }) => (
+  <div className="mt-8 flex items-baseline justify-between border-t border-[#21282A] pt-4">
+    <span className="text-[11px] font-medium uppercase tracking-[0.18em] text-[#8A9092]">Totale offerto</span>
+    <span className="text-2xl font-medium tabular-nums">{formatCurrency(valore)}</span>
+  </div>
+);
+
+/**
+ * Schermata unica per tutti gli esiti che non mostrano il documento (revocato,
+ * scaduto, non trovato, documento assente, o un errore di rete): un cliente che
+ * vede una pagina bianca o un errore tecnico è il modo più efficace di perdere
+ * una vendita, quindi ognuno ha un messaggio in italiano che dice cosa fare,
+ * più un modo per riprovare. Anche qui il marchio, perché il cliente deve
+ * capire da chi arriva il link anche quando il link non funziona.
+ */
 const OutcomeScreen = ({ title, message, onRetry }: { title: string; message: string; onRetry: () => void }) => (
-  <div className="min-h-screen bg-background flex items-center justify-center p-4">
-    <Card variant="static" className="w-full max-w-md">
-      <CardContent className="pt-6">
-        <div className="flex flex-col items-center gap-4 text-center">
-          <div className="rounded-full bg-destructive/10 p-3">
-            <AlertCircle className="h-8 w-8 text-destructive" />
-          </div>
-          <div>
-            <h2 className="mb-2 text-xl font-semibold">{title}</h2>
-            <p className="text-muted-foreground">{message}</p>
-          </div>
-          <Button variant="outline" size="sm" onClick={onRetry}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Riprova
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+  <div className="flex min-h-screen flex-col bg-[#F5F4F1] font-sans text-[#21282A] antialiased">
+    <header className="border-b border-[#E2E1DC]">
+      <div className="mx-auto flex max-w-3xl px-6 py-5">
+        <LarinMark />
+      </div>
+    </header>
+    <main className="flex flex-1 items-center justify-center px-6 py-16">
+      <div className="w-full max-w-md">
+        <span aria-hidden className="mb-6 block h-[3px] w-10 bg-[#F7DB45]" />
+        <h1 className="text-2xl font-light">{title}</h1>
+        <p className="mt-3 leading-relaxed text-[#6B7274]">{message}</p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-8 inline-flex items-center gap-2 rounded-full border border-[#D6D5CF] px-5 py-2.5 text-[13px] transition-colors hover:border-[#4E5758] hover:bg-white"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          Riprova
+        </button>
+      </div>
+    </main>
   </div>
 );
 
