@@ -58,6 +58,21 @@ type FicScope =
   | 'issued_documents.quotes:r' | 'issued_documents.quotes:a'
   | 'issued_documents.invoices:r' | 'issued_documents.invoices:a';
 
+// ATTENZIONE: questo elenco descrive il TOKEN ESISTENTE, non quello che
+// vorremmo. La URL di autorizzazione in fatture-in-cloud-oauth chiede ora anche
+// products:r, entity.clients:a e issued_documents.invoices:a, ma un token già
+// emesso non li contiene: gli scope si fissano nel momento in cui il token
+// nasce. Finché l'account non viene ricollegato, aggiungerli qui produrrebbe
+// 403 opachi da FiC al posto degli errori parlanti di FicScopeError.
+//
+// Quando il collegamento sarà rifatto, questo insieme diventa:
+//   'entity.suppliers:a', 'entity.clients:a', 'settings:a',
+//   'products:r', 'issued_documents.quotes:a', 'issued_documents.invoices:a'
+//
+// La soluzione strutturale, da fare quando si tocca la produzione: FiC
+// restituisce gli scope concessi nella risposta del token endpoint. Salvarli su
+// fic_oauth_tokens e leggerli da lì toglie di mezzo questa costante e la
+// possibilità che menta.
 const GRANTED_SCOPES: ReadonlySet<FicScope> = new Set<FicScope>([
   'entity.suppliers:a',
   'settings:a', // concesso ma nessuna operazione lo usa ancora (vedi report)
@@ -76,7 +91,7 @@ const OPERATION_SCOPES = {
   getQuotePreCreateInfo: 'issued_documents.quotes:a',
   createQuote: 'issued_documents.quotes:a',
   // Non concessi oggi: prodotti, clienti e fatture non sono accessibili.
-  listProducts: 'products:a',
+  listProducts: 'products:r',
   getClient: 'entity.clients:a',
   upsertClient: 'entity.clients:a',
   createInvoice: 'issued_documents.invoices:a',

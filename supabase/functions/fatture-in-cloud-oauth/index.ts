@@ -191,7 +191,27 @@ serve(async (req) => {
       authUrl.searchParams.set('response_type', 'code');
       authUrl.searchParams.set('client_id', clientId);
       authUrl.searchParams.set('redirect_uri', redirectUri);
-      authUrl.searchParams.set('scope', 'entity.suppliers:a settings:a issued_documents.quotes:a');
+      // Gli scope NON sono una proprietà dell'app e non si configurano nel
+      // pannello Sviluppatore di Fatture in Cloud: con l'OAuth Code Flow si
+      // chiedono qui, nella URL di autorizzazione, e l'utente li concede
+      // ricollegando l'applicazione. Cambiare questa riga e ricollegare è
+      // l'unico modo di ampliarli.
+      //
+      // products:r          importare il listino (i 45 codici) senza poterlo
+      //                     alterare: da qui in avanti la fonte del listino è
+      //                     TimeTrap, non FiC.
+      // entity.clients:a    l'anagrafica clienti serve in scrittura perché
+      //                     emettere una fattura per un cliente nuovo richiede
+      //                     di crearlo. Nota: fatture-in-cloud-send-quote
+      //                     chiama già /entities/clients con uno scope che non
+      //                     lo copre, quindi oggi è latentemente rotta.
+      // issued_documents.invoices:a  emettere fatture e proforma (blocco coda
+      //                     fatture) e leggere gli incassi per la
+      //                     riconciliazione.
+      authUrl.searchParams.set(
+        'scope',
+        'entity.suppliers:a entity.clients:a settings:a products:r issued_documents.quotes:a issued_documents.invoices:a',
+      );
       authUrl.searchParams.set('state', statePayload);
 
       return jsonResponse({ authUrl: authUrl.toString() });
