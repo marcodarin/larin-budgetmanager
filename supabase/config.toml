@@ -111,3 +111,6 @@ verify_jwt = true
 
 [functions.offer-public]
 verify_jwt = false
+
+[functions.invoice-issue]
+verify_jwt = true

@@ -177,8 +177,10 @@ const ListParamsSchema = z.object({
 }).default({});
 
 const QuoteEntitySchema = z.object({
+  id: z.number().int().optional(), // fic_id di un'entità già esistente su FiC (mai usato da createQuote: lì l'entity è sempre inline, vedi opCreateQuote)
   name: z.string().min(1),
   email: z.string().email().optional(),
+  phone: z.string().optional(),
   vatNumber: z.string().optional(),
   taxCode: z.string().optional(),
   addressStreet: z.string().optional(),
@@ -212,17 +214,44 @@ const SupplierIdParamsSchema = z.object({ supplierId: z.number().int() });
 const ClientIdParamsSchema = z.object({ clientId: z.number().int() });
 const EmptyParamsSchema = z.object({}).default({});
 
-// Stub non raggiungibili oggi (scope non concesso): schema minimo, giusto per
-// documentare la forma attesa dell'operazione quando lo scope sarà concesso.
 const UpsertClientParamsSchema = z.object({
+  // Riga locale di clients: dopo la creazione su FiC, fic_id viene scritto
+  // qui (stesso motivo di syncProductCatalog: fic-adapter ha già il client
+  // service-role, un secondo giro HTTP interno non avrebbe alcun vantaggio).
+  clientId: z.string().uuid(),
   name: z.string().min(1),
   email: z.string().email().optional(),
+  phone: z.string().optional(),
   vatNumber: z.string().optional(),
 });
+
+// A differenza di QuoteItemSchema (vatId già risolto da chi chiama),
+// l'aliquota qui è la percentuale grezza (vat_rate su invoice_queue): l'id
+// FiC è un dettaglio di questa company e si risolve dentro opCreateInvoice
+// leggendo /issued_documents/info, non a monte.
+const InvoiceItemSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  qty: z.number().positive(),
+  netPrice: z.number(),
+  vatRate: z.number().min(0).max(100),
+  discount: z.number().min(0).max(100).optional(),
+});
+
 const CreateInvoiceParamsSchema = z.object({
+  type: z.enum(['invoice', 'proforma']), // fattura vs proforma: due IssuedDocumentType diversi in FiC
   entity: QuoteEntitySchema,
   subject: z.string().optional(),
-  items: z.array(QuoteItemSchema).min(1),
+  items: z.array(InvoiceItemSchema).min(1),
+  dueDate: z.string().optional(), // scadenza dell'unica rata (payments_list)
+  showPayments: z.boolean().optional(),
+  showPaymentMethod: z.boolean().optional(),
+  // true: costruisce il payload esatto e risolve l'aliquota leggendo FiC
+  // (sola lettura), ma NON esegue il POST /issued_documents. Vive qui e non
+  // in invoice-issue perché è l'unico punto che parla davvero con FiC: la
+  // garanzia "mai un POST in dry run" deve stare accanto alla riga che
+  // farebbe il POST, non essere una proprietà emergente di chi chiama.
+  dryRun: z.boolean().optional(),
 });
 
 const RequestSchema = z.discriminatedUnion('operation', [
@@ -243,8 +272,10 @@ type ListParams = z.infer<typeof ListParamsSchema>;
 
 function entityToFicPayload(entity: z.infer<typeof QuoteEntitySchema>) {
   return {
+    id: entity.id,
     name: entity.name,
     email: entity.email,
+    phone: entity.phone,
     vat_number: entity.vatNumber,
     tax_code: entity.taxCode,
     address_street: entity.addressStreet,
@@ -252,6 +283,52 @@ function entityToFicPayload(entity: z.infer<typeof QuoteEntitySchema>) {
     address_city: entity.addressCity,
     address_province: entity.addressProvince,
   };
+}
+
+// Endpoint reale: GET /issued_documents/info (NON /issued_documents/pre_create_info,
+// che risponde 404 su questo account: bug preesistente in opGetQuotePreCreateInfo,
+// scoperto implementando createInvoice e corretto qui perché la funzione serve
+// a entrambe le operazioni. Verificato il 14/08/2026 su company 22474 per
+// type=quote, type=invoice e type=proforma.
+async function fetchIssuedDocumentPreCreateInfo(
+  token: string,
+  companyId: number,
+  type: 'quote' | 'invoice' | 'proforma',
+) {
+  const json = await callFic(token, `/c/${companyId}/issued_documents/info?type=${type}`);
+  return json?.data;
+}
+
+// L'id di un vat_type è specifico della company, mai un valore a piacere
+// (VatType.value è read-only lato FiC, stesso principio già vale per le
+// quotes). Preferenza: il default dell'account per quel tipo di documento se
+// la sua aliquota coincide (è letteralmente quello che FiC propone per una
+// riga senza prodotto collegato), altrimenti il primo vat_type non disabilitato
+// con quel valore, scegliendo l'id più basso quando ce ne sono più d'uno: sul
+// company 22474 esistono decine di vat_type storici allo stesso valore (es.
+// 22%), e gli id bassi (0, 3, 4...) sono quelli generici sempre presenti,
+// mentre quelli alti sono spesso legati a un prodotto specifico importato.
+function resolveVatTypeId(preCreateInfo: any, vatRatePercent: number): number {
+  const defaultVat = preCreateInfo?.items_default_values?.vat;
+  if (defaultVat && !defaultVat.is_disabled && Number(defaultVat.value) === Number(vatRatePercent)) {
+    return defaultVat.id;
+  }
+
+  const list: Array<{ id: number; value: number; is_disabled?: boolean }> = preCreateInfo?.vat_types_list ?? [];
+  const candidates = list
+    .filter((v) => !v.is_disabled && Number(v.value) === Number(vatRatePercent))
+    .sort((a, b) => a.id - b.id);
+
+  if (candidates.length === 0) {
+    throw new Error(
+      `Nessuna aliquota IVA al ${vatRatePercent}% configurata su Fatture in Cloud per questa azienda: crearla in Impostazioni > Aliquote IVA prima di riprovare.`,
+    );
+  }
+  return candidates[0].id;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -300,9 +377,8 @@ async function opGetQuote(token: string, companyId: number, params: { documentId
 // Sotto lo stesso scope delle quotes (fa parte di IssuedDocumentsApi), quindi
 // NON serve settings:a per questo. Non accetta `fieldset`: a differenza di
 // list/get issued_documents, questo endpoint ha solo company_id + type.
-async function opGetQuotePreCreateInfo(token: string, companyId: number) {
-  const json = await callFic(token, `/c/${companyId}/issued_documents/pre_create_info?type=quote`);
-  return json?.data;
+function opGetQuotePreCreateInfo(token: string, companyId: number) {
+  return fetchIssuedDocumentPreCreateInfo(token, companyId, 'quote');
 }
 
 async function opCreateQuote(token: string, companyId: number, params: z.infer<typeof CreateQuoteParamsSchema>) {
@@ -521,28 +597,108 @@ async function opSyncProductCatalog(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// OPERAZIONI DI DOMINIO - non implementate
-//
-// Lo scope può essere concesso (col token manuale lo è) ma il codice che
-// parla con FiC per questi domini non è ancora stato scritto. Restano
-// dichiarate per rendere esplicito che clienti e fatture sono domini noti,
-// e per dare un punto pronto dove scrivere la vera implementazione, senza
-// dover ridisegnare il contratto dell'adapter.
+// OPERAZIONI DI DOMINIO — scope: entity.clients:a (concesso col token manuale)
 // ─────────────────────────────────────────────────────────────────────────
-
-// Endpoint reale: GET /c/{company_id}/entities/clients/{client_id}?fieldset=detailed
-async function opGetClient(_token: string, _companyId: number, _params: { clientId: number }): Promise<never> {
-  throw new Error('Operazione non implementata: il codice che chiama FiC per i clienti non è ancora stato scritto in fic-adapter.');
+async function opGetClient(token: string, companyId: number, params: { clientId: number }) {
+  const json = await callFic(token, `/c/${companyId}/entities/clients/${params.clientId}?fieldset=detailed`);
+  return json?.data;
 }
 
-// Endpoint reale: POST/PUT /c/{company_id}/entities/clients[/{client_id}]
-async function opUpsertClient(_token: string, _companyId: number, _params: z.infer<typeof UpsertClientParamsSchema>): Promise<never> {
-  throw new Error('Operazione non implementata: il codice che chiama FiC per i clienti non è ancora stato scritto in fic-adapter.');
+// Crea sempre (non aggiorna): il chiamante (invoice-issue) invoca questa
+// operazione solo quando clients.fic_id è nullo, cioè il cliente non esiste
+// ancora su FiC (vedi report di consegna dell'emissione fatture). Non cerca
+// un'entità omonima già presente su FiC: la fonte di verità è il nostro
+// fic_id, non un match per nome (fragile, vedi i gotcha di ricerca `q=`).
+async function opUpsertClient(
+  supabase: ReturnType<typeof createClient>,
+  token: string,
+  companyId: number,
+  params: z.infer<typeof UpsertClientParamsSchema>,
+) {
+  const payload = {
+    data: {
+      type: 'company', // i clienti Larin sono aziende B2B; non c'è un campo persona/azienda su clients
+      name: params.name,
+      email: params.email || undefined,
+      phone: params.phone || undefined,
+      vat_number: params.vatNumber || undefined,
+    },
+  };
+
+  const json = await callFic(token, `/c/${companyId}/entities/clients`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
+  const ficId = json?.data?.id;
+  if (!ficId) throw new Error('Fatture in Cloud non ha restituito un id per il cliente creato');
+
+  const { error } = await supabase.from('clients').update({ fic_id: ficId }).eq('id', params.clientId);
+  if (error) throw error;
+
+  return { id: ficId };
 }
 
-// Endpoint reale: POST /c/{company_id}/issued_documents (type: 'invoice')
-async function opCreateInvoice(_token: string, _companyId: number, _params: z.infer<typeof CreateInvoiceParamsSchema>): Promise<never> {
-  throw new Error('Operazione non implementata: il codice che chiama FiC per le fatture non è ancora stato scritto in fic-adapter.');
+// ─────────────────────────────────────────────────────────────────────────
+// OPERAZIONI DI DOMINIO — scope: issued_documents.invoices:a (concesso col
+// token manuale). Vale anche per document_kind = proforma: il vero scope FiC
+// per le proforma è issued_documents.proformas:a, MAI verificato esplicitamente
+// col token manuale (solo invoice e quote lo sono state, vedi fic-token.ts).
+// Nessuna riga di test aveva document_kind = proforma al momento di scrivere
+// questo codice: primo utilizzo reale da verificare (vedi report).
+// ─────────────────────────────────────────────────────────────────────────
+// Endpoint reale: POST /c/{company_id}/issued_documents.
+//
+// Bozza voluta dal PRD, non emissione fiscale: qui non si imposta MAI
+// `e_invoice`, per nessun valore di dryRun. La trasmissione a SDI è un gesto
+// umano dentro FiC (POST /issued_documents/{id}/e_invoice/send), fuori dal
+// perimetro di questa funzione: nessun parametro di questa operazione può
+// farla scattare.
+async function opCreateInvoice(token: string, companyId: number, params: z.infer<typeof CreateInvoiceParamsSchema>) {
+  const preCreateInfo = await fetchIssuedDocumentPreCreateInfo(token, companyId, params.type);
+
+  let grossTotal = 0;
+  const itemsList = params.items.map((item) => {
+    const vatId = resolveVatTypeId(preCreateInfo, item.vatRate);
+    const discount = item.discount ?? 0;
+    const netAfterDiscount = item.netPrice * item.qty * (1 - discount / 100);
+    grossTotal += netAfterDiscount * (1 + item.vatRate / 100);
+    return {
+      name: item.name,
+      description: item.description,
+      qty: item.qty,
+      net_price: item.netPrice,
+      vat: { id: vatId },
+      discount,
+    };
+  });
+
+  const payload = {
+    data: {
+      type: params.type,
+      entity: entityToFicPayload(params.entity),
+      subject: params.subject,
+      items_list: itemsList,
+      payments_list: params.dueDate
+        ? [{ due_date: params.dueDate, amount: round2(grossTotal) }]
+        : undefined,
+      show_payments: params.showPayments ?? true,
+      show_payment_method: params.showPaymentMethod ?? true,
+    },
+  };
+
+  // Il vincolo assoluto vive qui, accanto all'unica riga che farebbe il POST:
+  // con dryRun true si esce PRIMA di chiamare callFic, qualunque cosa dica il
+  // resto del payload.
+  if (params.dryRun) {
+    return { payload, ficDocument: null };
+  }
+
+  const json = await callFic(token, `/c/${companyId}/issued_documents`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return { payload, ficDocument: json?.data };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -674,7 +830,7 @@ serve(async (req) => {
         result = await opGetClient(token, companyId, parsed.data.params);
         break;
       case 'upsertClient':
-        result = await opUpsertClient(token, companyId, parsed.data.params);
+        result = await opUpsertClient(supabase, token, companyId, parsed.data.params);
         break;
       case 'createInvoice':
         result = await opCreateInvoice(token, companyId, parsed.data.params);
