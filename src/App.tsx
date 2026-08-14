@@ -26,6 +26,9 @@ const QuoteDetail = React.lazy(() => import("./pages/QuoteDetail"));
 const Offers = React.lazy(() => import("./pages/Offers"));
 const OfferDetail = React.lazy(() => import("./pages/OfferDetail"));
 const InvoiceQueue = React.lazy(() => import("./pages/InvoiceQueue"));
+const Subscriptions = React.lazy(() => import("./pages/Subscriptions"));
+const Tenders = React.lazy(() => import("./pages/Tenders"));
+const SalesDashboard = React.lazy(() => import("./pages/SalesDashboard"));
 const ApprovedProjects = React.lazy(() => import("./pages/ApprovedProjects"));
 const Settings = React.lazy(() => import("./pages/Settings"));
 const Profile = React.lazy(() => import("./pages/Profile"));
@@ -75,6 +78,9 @@ const App = () => (
               <Route path="/offers" element={<AppLayout><Offers /></AppLayout>} />
               <Route path="/offers/:offerId" element={<AppLayout><OfferDetail /></AppLayout>} />
               <Route path="/invoices" element={<AppLayout><InvoiceQueue /></AppLayout>} />
+              <Route path="/subscriptions" element={<AppLayout><Subscriptions /></AppLayout>} />
+              <Route path="/tenders" element={<AppLayout><Tenders /></AppLayout>} />
+              <Route path="/sales" element={<AppLayout><SalesDashboard /></AppLayout>} />
               <Route path="/settings" element={<AppLayout><Settings /></AppLayout>} />
               <Route path="/roles-documentation" element={<AppLayout><RolesDocumentation /></AppLayout>} />
               <Route path="/notifications" element={<AppLayout><Notifications /></AppLayout>} />
