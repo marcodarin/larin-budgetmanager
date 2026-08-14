@@ -5,6 +5,7 @@ import {
   FicNotConnectedError,
   FicReconnectRequiredError,
   getValidFicToken,
+  isUsingManualFicToken,
 } from "../_shared/fic-token.ts";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -18,6 +19,12 @@ import {
 // -register-webhook esistenti NON sono state toccate: restano i chiamanti
 // diretti storici. Migrarle a passare da qui è un refactor successivo,
 // fuori dal perimetro di questo file.
+//
+// Unica eccezione al "solo proxy verso FiC": syncProductCatalog scrive anche
+// in locale (tabella products). Non è un'incoerenza col principio sopra: qui
+// dentro c'è già il client service-role e il ruolo del chiamante verificato,
+// quindi scrivere qui evita di far viaggiare l'intero listino su un secondo
+// giro HTTP interno per nessun vantaggio reale.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const corsHeaders = {
@@ -43,46 +50,57 @@ function jsonResponse(body: unknown, status = 200) {
 // (qui dichiariamo solo quelli rilevanti per i domini che questo adapter
 // espone o potrebbe esporre in futuro).
 //
-// GRANTED_SCOPES sono quelli EFFETTIVAMENTE concessi all'app Larin oggi
-// (verificare/aggiornare in Fatture in Cloud > Impostazioni > App
-// collegate). Se in futuro serve un dominio nuovo, il primo passo è
-// aggiungere lo scope là e poi qui: aggiungerlo solo qui senza che sia
-// davvero concesso farebbe fallire l'operazione allo stesso modo (assertScope
-// verifica GRANTED_SCOPES, non l'esistenza dello scope in astratto).
-// ─────────────────────────────────────────────────────────────────────────
-type FicScope =
-  | 'entity.clients:r' | 'entity.clients:a'
-  | 'entity.suppliers:r' | 'entity.suppliers:a'
-  | 'settings:r' | 'settings:a'
-  | 'products:r' | 'products:a'
-  | 'issued_documents.quotes:r' | 'issued_documents.quotes:a'
-  | 'issued_documents.invoices:r' | 'issued_documents.invoices:a';
-
-// ATTENZIONE: questo elenco descrive il TOKEN ESISTENTE, non quello che
-// vorremmo. La URL di autorizzazione in fatture-in-cloud-oauth chiede ora anche
-// products:r, entity.clients:a e issued_documents.invoices:a, ma un token già
-// emesso non li contiene: gli scope si fissano nel momento in cui il token
-// nasce. Finché l'account non viene ricollegato, aggiungerli qui produrrebbe
-// 403 opachi da FiC al posto degli errori parlanti di FicScopeError.
+// Gli scope EFFETTIVAMENTE concessi dipendono da quale token sta usando
+// fic-token.ts (vedi getGrantedScopes sotto), non sono più un'unica costante:
+// - token manuale (FIC_MANUAL_TOKEN presente): un'app di proprietà di Marco
+//   con tutti i permessi, verificato il 13/08/2026: tutti gli scope sono
+//   concessi per davvero, ALL_SCOPES lo dice il vero.
+// - OAuth (nessun token manuale): resta l'elenco storico OAUTH_GRANTED_SCOPES
+//   sotto, perché descrive il TOKEN ESISTENTE, non quello che vorremmo. La
+//   URL di autorizzazione in fatture-in-cloud-oauth chiede ora anche
+//   products:r, entity.clients:a e issued_documents.invoices:a, ma un token
+//   già emesso non li contiene: gli scope si fissano nel momento in cui il
+//   token nasce. Finché l'account OAuth non viene ricollegato, aggiungerli
+//   qui produrrebbe 403 opachi da FiC al posto degli errori parlanti di
+//   FicScopeError.
 //
-// Quando il collegamento sarà rifatto, questo insieme diventa:
+// Quando l'OAuth sarà ricollegato, OAUTH_GRANTED_SCOPES diventa:
 //   'entity.suppliers:a', 'entity.clients:a', 'settings:a',
 //   'products:r', 'issued_documents.quotes:a', 'issued_documents.invoices:a'
 //
-// La soluzione strutturale, da fare quando si tocca la produzione: FiC
+// La soluzione strutturale, da fare quando si tocca la produzione OAuth: FiC
 // restituisce gli scope concessi nella risposta del token endpoint. Salvarli su
-// fic_oauth_tokens e leggerli da lì toglie di mezzo questa costante e la
-// possibilità che menta.
-const GRANTED_SCOPES: ReadonlySet<FicScope> = new Set<FicScope>([
+// fic_oauth_tokens e leggerli da lì toglie di mezzo la costante OAuth e la
+// possibilità che menta (il token manuale invece non ha questo problema: gli
+// scope concessi sono noti e verificati una volta per tutte).
+// ─────────────────────────────────────────────────────────────────────────
+const FIC_SCOPES = [
+  'entity.clients:r', 'entity.clients:a',
+  'entity.suppliers:r', 'entity.suppliers:a',
+  'settings:r', 'settings:a',
+  'products:r', 'products:a',
+  'issued_documents.quotes:r', 'issued_documents.quotes:a',
+  'issued_documents.invoices:r', 'issued_documents.invoices:a',
+] as const;
+type FicScope = typeof FIC_SCOPES[number];
+
+const ALL_SCOPES: ReadonlySet<FicScope> = new Set<FicScope>(FIC_SCOPES);
+
+const OAUTH_GRANTED_SCOPES: ReadonlySet<FicScope> = new Set<FicScope>([
   'entity.suppliers:a',
   'settings:a', // concesso ma nessuna operazione lo usa ancora (vedi report)
   'issued_documents.quotes:a',
 ]);
 
+function getGrantedScopes(): ReadonlySet<FicScope> {
+  return isUsingManualFicToken() ? ALL_SCOPES : OAUTH_GRANTED_SCOPES;
+}
+
 // Ogni operazione di dominio dichiara qui lo scope che richiede. Questa
 // tabella è controllata PRIMA di leggere il token o chiamare FiC: se lo
-// scope non è in GRANTED_SCOPES, l'operazione fallisce subito (vedi
-// assertScope in serve()) invece di arrivare a un 403 opaco dall'API.
+// scope non è tra quelli concessi (vedi getGrantedScopes), l'operazione
+// fallisce subito (vedi assertScope in serve()) invece di arrivare a un 403
+// opaco dall'API.
 const OPERATION_SCOPES = {
   listSuppliers: 'entity.suppliers:a',
   getSupplier: 'entity.suppliers:a',
@@ -90,8 +108,9 @@ const OPERATION_SCOPES = {
   getQuote: 'issued_documents.quotes:a',
   getQuotePreCreateInfo: 'issued_documents.quotes:a',
   createQuote: 'issued_documents.quotes:a',
-  // Non concessi oggi: prodotti, clienti e fatture non sono accessibili.
+  // Con OAuth non concessi oggi; con il token manuale sì (vedi getGrantedScopes).
   listProducts: 'products:r',
+  syncProductCatalog: 'products:r',
   getClient: 'entity.clients:a',
   upsertClient: 'entity.clients:a',
   createInvoice: 'issued_documents.invoices:a',
@@ -102,16 +121,16 @@ type OperationName = keyof typeof OPERATION_SCOPES;
 class FicScopeError extends Error {
   constructor(public readonly scope: FicScope, public readonly operation: string) {
     super(
-      `L'operazione "${operation}" richiede lo scope OAuth "${scope}", non concesso all'app Larin in Fatture in Cloud. ` +
-      `Per abilitarla: richiedere lo scope in Fatture in Cloud > Impostazioni > App collegate, poi ricollegare ` +
+      `L'operazione "${operation}" richiede lo scope "${scope}", non concesso al token Fatture in Cloud in uso. ` +
+      `Con OAuth: richiedere lo scope in Fatture in Cloud > Impostazioni > App collegate, poi ricollegare ` +
       `l'account (disconnect + nuova autorizzazione) perché il token attuale non lo includerà finché non viene riemesso.`,
     );
     this.name = 'FicScopeError';
   }
 }
 
-function assertScope(scope: FicScope, operation: string): void {
-  if (!GRANTED_SCOPES.has(scope)) throw new FicScopeError(scope, operation);
+function assertScope(grantedScopes: ReadonlySet<FicScope>, scope: FicScope, operation: string): void {
+  if (!grantedScopes.has(scope)) throw new FicScopeError(scope, operation);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -214,6 +233,7 @@ const RequestSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('getQuotePreCreateInfo'), params: EmptyParamsSchema }),
   z.object({ operation: z.literal('createQuote'), params: CreateQuoteParamsSchema }),
   z.object({ operation: z.literal('listProducts'), params: ListParamsSchema }),
+  z.object({ operation: z.literal('syncProductCatalog'), params: EmptyParamsSchema }),
   z.object({ operation: z.literal('getClient'), params: ClientIdParamsSchema }),
   z.object({ operation: z.literal('upsertClient'), params: UpsertClientParamsSchema }),
   z.object({ operation: z.literal('createInvoice'), params: CreateInvoiceParamsSchema }),
@@ -316,34 +336,213 @@ async function opCreateQuote(token: string, companyId: number, params: z.infer<t
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// OPERAZIONI DI DOMINIO — scope NON concessi oggi
+// OPERAZIONI DI DOMINIO - scope: products:r
+// ─────────────────────────────────────────────────────────────────────────
+async function opListProducts(token: string, companyId: number, params: ListParams) {
+  const qs = new URLSearchParams({
+    fieldset: 'detailed',
+    // FiC risponde 422 sotto per_page=10: non è un problema di permessi, è un
+    // vincolo dell'endpoint. Il default 20 qui sotto sta sopra la soglia.
+    page: String(params.page ?? 1),
+    per_page: String(params.perPage ?? 20),
+  });
+  if (params.query) qs.set('q', params.query);
+  const json = await callFic(token, `/c/${companyId}/products?${qs}`);
+  return json?.data;
+}
+
+// Legge l'intero listino paginando (per_page=100, poi last_page): oggi sono
+// 70 prodotti e stanno in una pagina sola, ma il loop non si ferma alla prima
+// pagina "a occhio": si ferma quando FiC dice che è l'ultima.
+async function fetchAllFicProducts(token: string, companyId: number): Promise<any[]> {
+  const all: any[] = [];
+  let page = 1;
+  while (true) {
+    const json = await callFic(token, `/c/${companyId}/products?fieldset=detailed&per_page=100&page=${page}`);
+    const items: any[] = json?.data ?? [];
+    all.push(...items);
+    const lastPage = json?.last_page ?? page;
+    if (page >= lastPage || items.length === 0) break;
+    page++;
+  }
+  return all;
+}
+
+type ProductNature = 'una_tantum' | 'ricorrente' | 'a_giornate';
+
+// Regola dichiarata per dedurre product_nature dal listino FiC (FR-1/B1),
+// in ordine di priorità:
+// 1) la categoria FiC contiene "CANONI" (RICAVI CANONI MARKETING, RICAVI
+//    CANONI TECH) → ricorrente: è Larin stessa a nominarle così, non è
+//    un'inferenza nostra.
+// 2) nome o descrizione contengono la parola "giornat" (giornata/giornate)
+//    → a_giornate: è il lessico reale con cui questi pacchetti sono descritti
+//    in FiC (es. "10 giornate lavoro"), non un pattern generico sui numeri.
+// 3) altrimenti una_tantum: il default meno dannoso per i casi ambigui.
+function deriveProductNature(category: string, name: string, description: string): ProductNature {
+  if (category.toUpperCase().includes('CANONI')) return 'ricorrente';
+  if (/giornat/i.test(`${name} ${description}`)) return 'a_giornate';
+  return 'una_tantum';
+}
+
+function numbersDiffer(a: number, b: number): boolean {
+  return Math.abs(a - b) >= 0.005;
+}
+
+interface ProductSyncSkip { code: string; name: string; reason: string }
+interface ProductSyncResult {
+  totalInFic: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  skipped: ProductSyncSkip[];
+}
+
+// Aggiorna/crea in products una singola riga a partire da un prodotto FiC.
+// Match: prima per fic_id (i run successivi al primo passano sempre da qui),
+// poi per code (aggancia prodotti già presenti in TimeTrap creati a mano
+// prima che esistesse il fic_id: è il caso del seed di staging, che
+// condivide i code col listino reale).
+async function upsertProductFromFic(
+  supabase: ReturnType<typeof createClient>,
+  p: any,
+  defaultUserId: string,
+): Promise<'created' | 'updated' | 'unchanged'> {
+  const ficId: number = p.id;
+  const code: string = p.code;
+  if (!code) throw new Error('prodotto FiC senza code');
+
+  let existing: any = null;
+  const { data: byFicId } = await supabase.from('products').select('*').eq('fic_id', ficId).maybeSingle();
+  existing = byFicId;
+  if (!existing) {
+    const { data: byCode } = await supabase
+      .from('products')
+      .select('*')
+      .eq('code', code)
+      .order('created_at', { ascending: true })
+      .limit(1);
+    const candidate = byCode?.[0];
+    if (candidate) {
+      if (candidate.fic_id != null && candidate.fic_id !== ficId) {
+        throw new Error(`code "${code}" già collegato al fic_id ${candidate.fic_id}, non a ${ficId}`);
+      }
+      existing = candidate;
+    }
+  }
+
+  const ficNet: number | null = p.net_price ?? null;
+  const ficGrossRaw: number | null = p.gross_price ?? null;
+  const ficVat: number | null = p.default_vat?.value ?? null;
+
+  // Aliquota di riferimento per calcolare il lordo quando FiC non lo fornisce
+  // esplicitamente: quella di FiC se c'è, altrimenti quella già su TimeTrap,
+  // altrimenti il default di schema (22).
+  const referenceVat = ficVat ?? (existing ? Number(existing.vat_rate) : null) ?? 22;
+  const ficGross = ficGrossRaw ?? (ficNet != null ? Math.round(ficNet * (1 + referenceVat / 100) * 100) / 100 : null);
+
+  const productNature = deriveProductNature(p.category ?? '', p.name ?? '', p.description ?? '');
+
+  // Campi sempre allineati al listino FiC: sono anagrafica/identità del
+  // prodotto, non dati che qualcuno modifica a mano in TimeTrap.
+  const patch: Record<string, unknown> = {
+    fic_id: ficId,
+    code,
+    name: p.name,
+    description: p.description || null,
+    revenue_category: p.category ?? null,
+    product_nature: productNature,
+  };
+
+  // Prezzi e aliquota: entrano nel patch SOLO se FiC ha un valore non nullo.
+  // Nel listino reale diversi prodotti "custom" hanno net_price/gross_price
+  // nulli apposta (prezzo deciso caso per caso): se il valore manca il campo
+  // resta fuori dal patch e la riga esistente non si tocca, invece di essere
+  // azzerata.
+  if (ficNet != null) patch.net_price = ficNet;
+  if (ficGross != null) patch.gross_price = ficGross;
+  if (ficVat != null) patch.vat_rate = ficVat;
+
+  if (!existing) {
+    const { error } = await supabase.from('products').insert({
+      ...patch,
+      user_id: defaultUserId,
+      category: p.category, // colonna legacy distinta da revenue_category, ma richiesta NOT NULL: stesso valore, non c'è altro da mettere in un insert
+      net_price: ficNet ?? 0,
+      gross_price: ficGross ?? 0,
+      vat_rate: ficVat ?? 22,
+    });
+    if (error) throw error;
+    return 'created';
+  }
+
+  const changed = Object.entries(patch).some(([key, value]) => {
+    const current = existing[key];
+    if (key === 'net_price' || key === 'gross_price' || key === 'vat_rate') {
+      return numbersDiffer(Number(current), Number(value));
+    }
+    return (current ?? null) !== (value ?? null);
+  });
+  if (!changed) return 'unchanged';
+
+  const { error } = await supabase.from('products').update(patch).eq('id', existing.id);
+  if (error) throw error;
+  return 'updated';
+}
+
+// Legge il listino intero e lo porta in products. Fa scrittura locale (non
+// solo lettura da FiC) perché fic-adapter ha già qui il client service-role e
+// il ruolo del chiamante verificato: separarla in un'altra function
+// costringerebbe a far viaggiare tutto il catalogo su un secondo giro HTTP
+// interno senza alcun vantaggio.
+async function opSyncProductCatalog(
+  supabase: ReturnType<typeof createClient>,
+  token: string,
+  companyId: number,
+  callerId: string,
+): Promise<ProductSyncResult> {
+  const ficProducts = await fetchAllFicProducts(token, companyId);
+
+  let created = 0, updated = 0, unchanged = 0;
+  const skipped: ProductSyncSkip[] = [];
+
+  for (const p of ficProducts) {
+    try {
+      const result = await upsertProductFromFic(supabase, p, callerId);
+      if (result === 'created') created++;
+      else if (result === 'updated') updated++;
+      else unchanged++;
+    } catch (e) {
+      skipped.push({ code: p.code ?? '?', name: p.name ?? '?', reason: (e as Error).message });
+    }
+  }
+
+  return { totalInFic: ficProducts.length, created, updated, unchanged, skipped };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// OPERAZIONI DI DOMINIO - non implementate
 //
-// Queste funzioni non vengono mai eseguite: assertScope() in serve() blocca
-// la richiesta prima ancora di arrivare qui (vedi OPERATION_SCOPES). Restano
-// dichiarate per due motivi: rendono esplicito nel codice che prodotti,
-// clienti e fatture sono domini noti ma non abilitati, e danno un punto
-// pronto dove scrivere la vera implementazione se/quando lo scope verrà
-// concesso — senza dover ridisegnare il contratto dell'adapter.
+// Lo scope può essere concesso (col token manuale lo è) ma il codice che
+// parla con FiC per questi domini non è ancora stato scritto. Restano
+// dichiarate per rendere esplicito che clienti e fatture sono domini noti,
+// e per dare un punto pronto dove scrivere la vera implementazione, senza
+// dover ridisegnare il contratto dell'adapter.
 // ─────────────────────────────────────────────────────────────────────────
 
-// Scope mancante: products:a. Endpoint reale: GET /c/{company_id}/products?fieldset=detailed
-async function opListProducts(_token: string, _companyId: number, _params: ListParams): Promise<never> {
-  throw new Error('products:a non concesso: vedi GRANTED_SCOPES in cima al file.');
-}
-
-// Scope mancante: entity.clients:a. Endpoint reale: GET /c/{company_id}/entities/clients/{client_id}?fieldset=detailed
+// Endpoint reale: GET /c/{company_id}/entities/clients/{client_id}?fieldset=detailed
 async function opGetClient(_token: string, _companyId: number, _params: { clientId: number }): Promise<never> {
-  throw new Error('entity.clients:a non concesso: vedi GRANTED_SCOPES in cima al file.');
+  throw new Error('Operazione non implementata: il codice che chiama FiC per i clienti non è ancora stato scritto in fic-adapter.');
 }
 
-// Scope mancante: entity.clients:a. Endpoint reale: POST/PUT /c/{company_id}/entities/clients[/{client_id}]
+// Endpoint reale: POST/PUT /c/{company_id}/entities/clients[/{client_id}]
 async function opUpsertClient(_token: string, _companyId: number, _params: z.infer<typeof UpsertClientParamsSchema>): Promise<never> {
-  throw new Error('entity.clients:a non concesso: vedi GRANTED_SCOPES in cima al file.');
+  throw new Error('Operazione non implementata: il codice che chiama FiC per i clienti non è ancora stato scritto in fic-adapter.');
 }
 
-// Scope mancante: issued_documents.invoices:a. Endpoint reale: POST /c/{company_id}/issued_documents (type: 'invoice')
+// Endpoint reale: POST /c/{company_id}/issued_documents (type: 'invoice')
 async function opCreateInvoice(_token: string, _companyId: number, _params: z.infer<typeof CreateInvoiceParamsSchema>): Promise<never> {
-  throw new Error('issued_documents.invoices:a non concesso: vedi GRANTED_SCOPES in cima al file.');
+  throw new Error('Operazione non implementata: il codice che chiama FiC per le fatture non è ancora stato scritto in fic-adapter.');
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -440,7 +639,7 @@ serve(async (req) => {
   // ── Da qui in poi: unico varco verso FiC. Ogni fallimento è tipizzato. ──
   try {
     const operation: OperationName = parsed.data.operation;
-    assertScope(OPERATION_SCOPES[operation], operation);
+    assertScope(getGrantedScopes(), OPERATION_SCOPES[operation], operation);
 
     const tokenRow = await getValidFicToken(supabase);
     const { access_token: token, company_id: companyId } = tokenRow;
@@ -467,6 +666,9 @@ serve(async (req) => {
         break;
       case 'listProducts':
         result = await opListProducts(token, companyId, parsed.data.params);
+        break;
+      case 'syncProductCatalog':
+        result = await opSyncProductCatalog(supabase, token, companyId, callerId);
         break;
       case 'getClient':
         result = await opGetClient(token, companyId, parsed.data.params);

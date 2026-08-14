@@ -63,3 +63,16 @@ export function roundToNearest5Minutes(hours: number): number {
   const rounded = Math.round(totalMinutes / 5) * 5;
   return rounded / 60;
 }
+
+/**
+ * Formats an amount as Italian currency (EUR).
+ * useGrouping è esplicito: senza, l'italiano non raggruppa le migliaia sotto i
+ * diecimila e "3500,00 €" appare accanto a "12.250,00 €" nella stessa colonna.
+ */
+export function formatCurrency(value: number): string {
+  return new Intl.NumberFormat('it-IT', {
+    style: 'currency',
+    currency: 'EUR',
+    useGrouping: 'always',
+  }).format(value);
+}

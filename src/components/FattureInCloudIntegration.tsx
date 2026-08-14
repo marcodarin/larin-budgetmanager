@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { Cloud, CheckCircle2, XCircle, RefreshCw, Trash2, Loader2, Link2, Unlink, RotateCw, AlertTriangle } from 'lucide-react';
+import { FunctionsHttpError } from '@supabase/supabase-js';
+import { Cloud, CheckCircle2, XCircle, RefreshCw, Trash2, Loader2, Link2, Unlink, RotateCw, AlertTriangle, PackageSearch } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { formatDistanceToNow } from 'date-fns';
@@ -16,6 +17,25 @@ interface Subscription {
   types: string[];
   status: string;
 }
+
+interface ProductSyncSkip {
+  code: string;
+  name: string;
+  reason: string;
+}
+
+interface ProductSyncResult {
+  totalInFic: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  skipped: ProductSyncSkip[];
+}
+
+// Ruoli abilitati a lanciare la sincronizzazione del listino: gli stessi che
+// fic-adapter accetta lato server (vedi serve() in supabase/functions/fic-adapter).
+// Tenerli allineati qui evita di mostrare un pulsante che poi darebbe 403.
+const PRODUCT_SYNC_ROLES = ['admin', 'account', 'finance'];
 
 export const FattureInCloudIntegration = () => {
   const queryClient = useQueryClient();
@@ -39,6 +59,19 @@ export const FattureInCloudIntegration = () => {
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, [queryClient]);
+
+  // Ruolo dell'utente corrente, per mostrare il pulsante di sync listino solo
+  // a chi il backend accetterebbe comunque (vedi PRODUCT_SYNC_ROLES sopra).
+  const { data: currentUserRole } = useQuery({
+    queryKey: ['current-user-role-fic'],
+    queryFn: async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return null;
+      const { data } = await supabase.from('user_roles').select('role').eq('user_id', user.id).maybeSingle();
+      return data?.role ?? null;
+    },
+  });
+  const canSyncProducts = PRODUCT_SYNC_ROLES.includes(currentUserRole ?? '');
 
   // Check connection status
   const { data: connectionData, isLoading: isCheckingConnection } = useQuery({
@@ -211,6 +244,39 @@ export const FattureInCloudIntegration = () => {
     onError: (error: Error) => { toast.error(`Errore sync: ${error.message}`); },
   });
 
+  // Import/aggiornamento del listino prodotti da FiC (fic-adapter, operazione
+  // syncProductCatalog). Ripetibile: un rilancio senza modifiche nel listino
+  // FiC riporta tutto in "invariati", non ricrea nulla.
+  const syncProductsMutation = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke('fic-adapter', {
+        body: { operation: 'syncProductCatalog', params: {} },
+      });
+      if (error) {
+        let serverMessage: string | undefined;
+        if (error instanceof FunctionsHttpError) {
+          try {
+            const body = await error.context.json();
+            serverMessage = body?.error?.message;
+          } catch {
+            // risposta non json: si usa il messaggio generico sotto
+          }
+        }
+        throw new Error(serverMessage || error.message || 'Sincronizzazione listino non riuscita');
+      }
+      return (data as { data: ProductSyncResult }).data;
+    },
+    onSuccess: (result) => {
+      toast.success(
+        `Listino sincronizzato: ${result.created} creati, ${result.updated} aggiornati, ${result.unchanged} invariati`,
+      );
+      if (result.skipped.length > 0) {
+        toast.warning(`${result.skipped.length} prodotti saltati: vedi il dettaglio qui sotto`);
+      }
+    },
+    onError: (error: Error) => { toast.error(`Errore sincronizzazione listino: ${error.message}`); },
+  });
+
   const isConnected = connectionData?.connected === true;
   const subscriptions: Subscription[] = subscriptionsData?.subscriptions || [];
   const hasSupplierWebhook = subscriptions.some((sub) => sub.types?.some((t) => t.includes('suppliers')));
@@ -347,6 +413,53 @@ export const FattureInCloudIntegration = () => {
               <div className="text-xs text-muted-foreground">
                 Ultima sincronizzazione manuale: {formatDistanceToNow(new Date(lastSyncSetting.at), { addSuffix: true, locale: it })}
                 {' '}— +{lastSyncSetting.created ?? 0} nuovi, {lastSyncSetting.updated ?? 0} aggiornati, {lastSyncSetting.deleted ?? 0} eliminati
+              </div>
+            )}
+
+            {/* Listino prodotti: indipendente dallo stato del collegamento OAuth
+                sopra, con il token manuale l'import funziona anche a account
+                "Non collegato" (quel badge riflette solo fic_oauth_tokens). */}
+            {canSyncProducts && (
+              <div className="space-y-2 pt-2 border-t">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div>
+                    <p className="text-sm font-medium">Listino prodotti</p>
+                    <p className="text-xs text-muted-foreground">
+                      Importa o aggiorna in TimeTrap i prodotti del listino di Fatture in Cloud
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => syncProductsMutation.mutate()}
+                    disabled={syncProductsMutation.isPending}
+                  >
+                    {syncProductsMutation.isPending ? (
+                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Sincronizzazione...</>
+                    ) : (
+                      <><PackageSearch className="h-4 w-4 mr-2" />Sincronizza listino prodotti</>
+                    )}
+                  </Button>
+                </div>
+
+                {syncProductsMutation.data && (
+                  <div className="text-sm space-y-1 bg-muted rounded-md p-3">
+                    <p>
+                      {syncProductsMutation.data.totalInFic} prodotti nel listino FiC:{' '}
+                      <span className="font-medium">{syncProductsMutation.data.created} creati</span>,{' '}
+                      <span className="font-medium">{syncProductsMutation.data.updated} aggiornati</span>,{' '}
+                      <span className="font-medium">{syncProductsMutation.data.unchanged} invariati</span>
+                    </p>
+                    {syncProductsMutation.data.skipped.length > 0 && (
+                      <div className="text-xs text-destructive space-y-0.5">
+                        <p className="font-medium">{syncProductsMutation.data.skipped.length} saltati:</p>
+                        {syncProductsMutation.data.skipped.map((s, i) => (
+                          <p key={i}>{s.code} ({s.name}): {s.reason}</p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

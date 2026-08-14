@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LogOut, FileText, FileSignature, FolderKanban, CheckCircle2, Calendar, HelpCircle, Eye, EyeOff, UserCog, BookOpen, GitBranch, Plug } from 'lucide-react';
+import { LogOut, FileText, FileSignature, FolderKanban, CheckCircle2, Calendar, HelpCircle, Eye, EyeOff, UserCog, BookOpen, GitBranch, Plug, Receipt } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -134,6 +134,21 @@ export const AppHeader = ({ onLogout, userProfile, userRole, onStartTour }: AppH
               >
                 <FileSignature className="h-4 w-4" />
                 Offerte
+              </NavLink>
+            )}
+            {(isAdmin || effectiveRole === 'finance') && (
+              <NavLink
+                to="/invoices"
+                className={({ isActive }) =>
+                  `flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                  }`
+                }
+              >
+                <Receipt className="h-4 w-4" />
+                Fatture
               </NavLink>
             )}
             {canViewProjects && effectiveRole !== 'external' && (

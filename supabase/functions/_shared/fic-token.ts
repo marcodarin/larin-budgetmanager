@@ -28,9 +28,37 @@ export class FicReconnectRequiredError extends Error {
   }
 }
 
+// Vero se esiste il secret FIC_MANUAL_TOKEN: un token emesso a mano da
+// un'app di proprietà di Marco con tutti i permessi (verificato il
+// 13/08/2026 su company/info, products, entities/clients, issued_documents
+// type=invoice e type=quote, info/payment_methods). Esportata perché
+// fic-adapter deve saperlo PRIMA di chiamare getValidFicToken, per calcolare
+// gli scope concessi senza duplicare qui il nome della env var.
+export function isUsingManualFicToken(): boolean {
+  return Boolean(Deno.env.get('FIC_MANUAL_TOKEN'));
+}
+
+// Il token manuale non scade e non passa da fic_oauth_tokens: niente refresh,
+// niente riga da leggere o riscrivere. company_id viene dal secret
+// FIC_COMPANY_ID (22474 per Larin), non dalla tabella.
+function getManualFicToken(): FicTokenRow | null {
+  const manualToken = Deno.env.get('FIC_MANUAL_TOKEN');
+  if (!manualToken) return null;
+  return {
+    id: 'manual-token',
+    access_token: manualToken,
+    refresh_token: '',
+    token_expiry: '2099-01-01T00:00:00.000Z', // sentinella "non scade mai"
+    company_id: Number(Deno.env.get('FIC_COMPANY_ID')),
+    company_name: null,
+  };
+}
+
 /**
  * Legge l'ultimo token FiC da fic_oauth_tokens e lo rinnova se scade entro 5
- * minuti, riscrivendo la riga con il nuovo access/refresh token.
+ * minuti, riscrivendo la riga con il nuovo access/refresh token. Se è
+ * presente il secret FIC_MANUAL_TOKEN, quel percorso ha la precedenza e
+ * questa funzione non tocca affatto fic_oauth_tokens (vedi getManualFicToken).
  *
  * Stessa logica finora duplicata (con lievi variazioni) in
  * fatture-in-cloud-oauth, fatture-in-cloud-send-quote,
@@ -42,6 +70,9 @@ export class FicReconnectRequiredError extends Error {
 export async function getValidFicToken(
   supabase: ReturnType<typeof createClient>,
 ): Promise<FicTokenRow> {
+  const manual = getManualFicToken();
+  if (manual) return manual;
+
   const clientId = Deno.env.get('FATTURE_IN_CLOUD_CLIENT_ID')!;
   const clientSecret = Deno.env.get('FATTURE_IN_CLOUD_CLIENT_SECRET')!;
 
