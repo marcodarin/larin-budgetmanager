@@ -4,18 +4,30 @@
 // contenuto produce sempre lo stesso PDF (a meno delle sole differenze di
 // libreria non evitabili, es. timestamp interno del file).
 //
-// Font standard Helvetica (encoding WinAnsi): copre le lettere accentate
-// italiane e l'Euro, ma non è garantito coprire qualunque carattere immesso a
-// mano (es. nomi cliente con caratteri esotici). sanitizeForPdf() sostituisce
-// con '?' i soli caratteri che il font non può codificare, invece di lasciar
-// esplodere pdf-lib a metà generazione.
+// La veste grafica rispecchia deliberatamente src/pages/PublicOffer.tsx (la
+// pagina pubblica dell'offerta): stessa palette, stesse etichette, stessa
+// gerarchia tipografica e lo stesso marchio disegnato con le stesse
+// proporzioni. Se la pagina pubblica cambia, questo file va aggiornato con lei.
+//
+// Font Manrope (pesi 300/400/500) incorporato via @pdf-lib/fontkit: copre il
+// latino esteso (accenti, ceco, polacco, turco...), a differenza di Helvetica
+// standard limitato a WinAnsi. Per gli alfabeti non latini (cinese, arabo...)
+// resta il ripiego di sanitizeForPdf(), che toglie prima i segni diacritici e
+// solo come ultima risorsa sostituisce con '?'.
+// @ts-ignore: i types generati da esm.sh per questo pacchetto non dichiarano
+// l'export default, ma il modulo lo espone regolarmente a runtime.
+import fontkit from 'https://esm.sh/@pdf-lib/fontkit@1.1.1';
 import {
   PDFDocument,
   PDFFont,
   PDFPage,
-  StandardFonts,
   rgb,
 } from 'https://esm.sh/pdf-lib@1.17.1';
+// I tre pesi di Manrope, incorporati come stringhe base64 (vedi il commento
+// in fonts/manrope-regular.ts sul perché non sono file .ttf letti a runtime).
+import { MANROPE_LIGHT_BASE64 } from './fonts/manrope-light.ts';
+import { MANROPE_REGULAR_BASE64 } from './fonts/manrope-regular.ts';
+import { MANROPE_MEDIUM_BASE64 } from './fonts/manrope-medium.ts';
 
 export interface OfferSnapshotLine {
   description: string;
@@ -86,11 +98,22 @@ const PAGE_WIDTH = 595.28; // A4 in punti
 const PAGE_HEIGHT = 841.89;
 const MARGIN = 50;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
-const FOOTER_RESERVE = 34;
+const FOOTER_RESERVE = 40;
 
-const COLOR_TEXT = rgb(0.13, 0.13, 0.13);
-const COLOR_GRAY = rgb(0.42, 0.42, 0.42);
-const COLOR_LINE = rgb(0.75, 0.75, 0.75);
+// -----------------------------------------------------------------------------
+// Palette Larin, identica a quella di src/pages/PublicOffer.tsx
+// -----------------------------------------------------------------------------
+
+const COLOR_INK = rgb(0x21 / 255, 0x28 / 255, 0x2a / 255); // #21282A, testo principale
+const COLOR_ANTRACITE = rgb(0x4e / 255, 0x57 / 255, 0x58 / 255); // #4E5758, marchio, nome cliente, condizioni
+const COLOR_GRAY = rgb(0x8a / 255, 0x90 / 255, 0x92 / 255); // #8A9092, etichette
+const COLOR_MUTED = rgb(0x6b / 255, 0x72 / 255, 0x74 / 255); // #6B7274, testo secondario (validità)
+const COLOR_LINE = rgb(0xe2 / 255, 0xe1 / 255, 0xdc / 255); // #E2E1DC, filetti
+const COLOR_LINE_FAINT = rgb(0xf1 / 255, 0xf0 / 255, 0xec / 255); // #F1F0EC, filetti chiarissimi tra le righe
+const COLOR_ACCENT = rgb(0xf7 / 255, 0xdb / 255, 0x45 / 255); // #F7DB45, giallo, con parsimonia
+const COLOR_DOT_BORDER = rgb(0xb9 / 255, 0xbd / 255, 0xbe / 255); // #B9BDBE, bordo dei punti non ancora "attivi"
+const COLOR_PAYOFF = rgb(0xa6 / 255, 0xab / 255, 0xac / 255); // #A6ABAC, payoff sotto il marchio
+const COLOR_WHITE = rgb(1, 1, 1);
 
 // -----------------------------------------------------------------------------
 // Formattazione italiana
@@ -100,6 +123,12 @@ function formatNumber(value: number, minDecimals: number, maxDecimals: number): 
   return new Intl.NumberFormat('it-IT', {
     minimumFractionDigits: minDecimals,
     maximumFractionDigits: maxDecimals,
+    // Senza 'always' l'it-IT di V8 raggruppa le migliaia solo da 10.000 in su
+    // (useGrouping di default è 'auto', non 'true'): nella stessa tabella si
+    // leggerebbe "3500,00 €" accanto a "12.250,00 €". Stesso fix di
+    // formattatoreEuro in PublicOffer.tsx, per lo stesso motivo: i due
+    // documenti devono mostrare gli stessi numeri nello stesso modo.
+    useGrouping: 'always',
   }).format(value);
 }
 
@@ -117,13 +146,25 @@ function formatPercentage(value: number): string {
   return `${formatNumber(rounded, isInteger ? 0 : 2, 2)}%`;
 }
 
-/** Data (senza ora) per campi `date` come valid_until o scheduled_date. */
+/** Data (senza ora) per campi `date` come scheduled_date nel piano di pagamento. */
 function formatDateIt(dateOnly: string): string {
   const d = new Date(`${dateOnly}T00:00:00Z`);
   return new Intl.DateTimeFormat('it-IT', {
     timeZone: 'UTC',
     day: '2-digit',
     month: '2-digit',
+    year: 'numeric',
+  }).format(d);
+}
+
+/** Data per esteso ("12 settembre 2026"), come la usa la pagina pubblica per la
+ * validità dell'offerta (date-fns 'dd MMMM yyyy'). */
+function formatDateItLong(dateOnly: string): string {
+  const d = new Date(`${dateOnly}T00:00:00Z`);
+  return new Intl.DateTimeFormat('it-IT', {
+    timeZone: 'UTC',
+    day: '2-digit',
+    month: 'long',
     year: 'numeric',
   }).format(d);
 }
@@ -149,49 +190,67 @@ function formatHashForDisplay(hash: string): string {
 }
 
 // -----------------------------------------------------------------------------
-// Sanificazione: WinAnsi copre le accentate italiane ma non ogni carattere
+// Sanificazione: Manrope copre il latino esteso ma non ogni carattere
 // -----------------------------------------------------------------------------
 
 /**
- * I font standard del PDF coprono WinAnsi, che basta per l'italiano ma non per
- * la ř di Přemysl o per un nome cinese. Prima di rinunciare a un carattere si
- * prova a toglierne i segni diacritici: "Přemysl" diventa "Premysl", che è
- * leggibile e riconoscibile, mentre "P?emysl" non è né l'uno né l'altro.
+ * Copertura glifi per font incorporato via fontkit, indicizzata sul PDFFont
+ * restituito da doc.embedFont(). Popolata in loadFonts().
  *
- * Per gli alfabeti non latini il ripiego resta il punto interrogativo: coprirli
- * richiede di incorporare un font Unicode nel documento, che è la strada giusta
- * quando servirà davvero e va deciso allora, non improvvisato qui.
+ * PDFFont.encodeText() NON è affidabile per rilevare i caratteri mancanti in
+ * un font incorporato con fontkit: per i font standard (WinAnsiEncoding)
+ * lancia un'eccezione sul carattere fuori codifica, ma per un font TrueType
+ * incorporato risolve silenziosamente sul glifo .notdef (il quadratino vuoto)
+ * invece di lanciare. Verificato: encodeText('中') con Manrope non lancia,
+ * quindi il vecchio controllo try/catch lascerebbe passare caratteri che il
+ * font non sa disegnare, producendo quadratini invece del ripiego in '?'. Il
+ * controllo vero va fatto sul font grezzo di fontkit, con hasGlyphForCodePoint.
+ */
+const glyphCoverage = new WeakMap<PDFFont, (codePoint: number) => boolean>();
+
+function hasGlyph(font: PDFFont, ch: string): boolean {
+  const checker = glyphCoverage.get(font);
+  if (!checker) return true; // font non censito: meglio assumere codificabile che censurare per errore
+  const codePoint = ch.codePointAt(0);
+  if (codePoint == null) return true;
+  try {
+    return checker(codePoint);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Manrope copre il latino esteso (accenti italiani, ř ceca, ł polacca, ş turca,
+ * l'Euro...), ma non è garantito coprire qualunque carattere immesso a mano
+ * (es. nomi cliente in caratteri non latini). Prima di rinunciare a un
+ * carattere si prova a toglierne i segni diacritici: "Přemysl" diventa
+ * "Premysl", che è leggibile e riconoscibile, mentre "P?emysl" non è né
+ * l'uno né l'altro.
+ *
+ * Per gli alfabeti non latini (cinese, arabo, cirillico...) il ripiego resta
+ * il punto interrogativo: coprirli richiederebbe un font Unicode molto più
+ * grande, che è la strada giusta quando servirà davvero e va deciso allora.
  */
 function sanitizeForPdf(text: string, font: PDFFont): string {
-  try {
-    font.encodeText(text);
-    return text;
-  } catch {
-    let out = '';
-    for (const ch of text) {
-      try {
-        font.encodeText(ch);
-        out += ch;
-        continue;
-      } catch {
-        // il carattere non è rappresentabile: si tenta la forma senza accenti
-      }
-
-      const senzaDiacritici = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
-      if (senzaDiacritici && senzaDiacritici !== ch) {
-        try {
-          font.encodeText(senzaDiacritici);
-          out += senzaDiacritici;
-          continue;
-        } catch {
-          // nemmeno la forma base è rappresentabile
-        }
-      }
-
-      out += '?';
+  let out = '';
+  let changed = false;
+  for (const ch of text) {
+    if (hasGlyph(font, ch)) {
+      out += ch;
+      continue;
     }
-    return out;
+    changed = true;
+
+    const senzaDiacritici = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (senzaDiacritici && senzaDiacritici !== ch && Array.from(senzaDiacritici).every((c) => hasGlyph(font, c))) {
+      out += senzaDiacritici;
+      continue;
+    }
+
+    out += '?';
   }
+  return changed ? out : text;
 }
 
 function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
@@ -222,10 +281,90 @@ function drawAligned(
   size: number,
   font: PDFFont,
   align: 'left' | 'right',
+  color: ReturnType<typeof rgb> = COLOR_INK,
 ) {
-  const w = font.widthOfTextAtSize(text, size);
+  const safe = sanitizeForPdf(text, font);
+  const w = font.widthOfTextAtSize(safe, size);
   const drawX = align === 'right' ? x + width - w : x;
-  page.drawText(text, { x: drawX, y, size, font, color: COLOR_TEXT });
+  page.drawText(safe, { x: drawX, y, size, font, color });
+}
+
+// -----------------------------------------------------------------------------
+// Testo con tracking (letter-spacing): pdf-lib non lo supporta nativamente. Si
+// disegna carattere per carattere avanzando la x della larghezza del glifo più
+// il tracking, esattamente come le etichette maiuscole e la wordmark a
+// schermo (tracking-[0.14em]/[0.18em]/[0.22em] di PublicOffer.tsx).
+// -----------------------------------------------------------------------------
+
+function trackedTextWidth(text: string, font: PDFFont, size: number, tracking: number): number {
+  const chars = Array.from(text);
+  if (chars.length === 0) return 0;
+  let width = -tracking;
+  for (const ch of chars) width += font.widthOfTextAtSize(ch, size) + tracking;
+  return width;
+}
+
+function drawTrackedText(
+  page: PDFPage,
+  text: string,
+  x: number,
+  y: number,
+  size: number,
+  font: PDFFont,
+  color: ReturnType<typeof rgb>,
+  tracking: number,
+): void {
+  const safe = sanitizeForPdf(text, font);
+  let cx = x;
+  for (const ch of Array.from(safe)) {
+    page.drawText(ch, { x: cx, y, size, font, color });
+    cx += font.widthOfTextAtSize(ch, size) + tracking;
+  }
+}
+
+function drawTrackedTextRight(
+  page: PDFPage,
+  text: string,
+  xEnd: number,
+  y: number,
+  size: number,
+  font: PDFFont,
+  color: ReturnType<typeof rgb>,
+  tracking: number,
+): void {
+  const safe = sanitizeForPdf(text, font);
+  const w = trackedTextWidth(safe, font, size, tracking);
+  drawTrackedText(page, safe, xEnd - w, y, size, font, color, tracking);
+}
+
+// -----------------------------------------------------------------------------
+// Il marchio Larin: anello sottile con tre punti in colonna (piccolo, grande,
+// piccolo). Stesse proporzioni dell'SVG <LarinMark> di PublicOffer.tsx
+// (viewBox 30, cerchio r=13, punti r 1.55/2.5/1.55 a cy 9.4/15/20.6).
+// -----------------------------------------------------------------------------
+
+function drawLarinMark(
+  page: PDFPage,
+  cx: number,
+  cy: number,
+  radius: number,
+  color: ReturnType<typeof rgb>,
+  opts: { ringOnly?: boolean } = {},
+): void {
+  page.drawCircle({
+    x: cx,
+    y: cy,
+    size: radius,
+    borderWidth: Math.max(1, radius * 0.131),
+    borderColor: color,
+  });
+  if (opts.ringOnly) return;
+  const offset = radius * 0.431;
+  const smallR = radius * 0.119;
+  const bigR = radius * 0.192;
+  page.drawCircle({ x: cx, y: cy + offset, size: smallR, color });
+  page.drawCircle({ x: cx, y: cy, size: bigR, color });
+  page.drawCircle({ x: cx, y: cy - offset, size: smallR, color });
 }
 
 // -----------------------------------------------------------------------------
@@ -280,7 +419,7 @@ function paymentPlanSentence(item: OfferSnapshotPaymentPlanItem): string {
  * fuorviante. Regola esplicita: se la somma dei line_total differisce
  * dall'offered_total di più di un centesimo per riga (tolleranza per gli
  * arrotondamenti di più voci), si nasconde il prezzo di riga e resta solo il
- * totale.
+ * totale. Stessa regola calcolata indipendentemente in PublicOffer.tsx.
  */
 export function shouldHideLinePrices(snapshot: OfferSnapshot): boolean {
   if (snapshot.version.billing_mode !== 'importo_finito') return false;
@@ -296,15 +435,17 @@ export function shouldHideLinePrices(snapshot: OfferSnapshot): boolean {
 
 class Layout {
   doc: PDFDocument;
+  fontLight: PDFFont;
   fontRegular: PDFFont;
-  fontBold: PDFFont;
+  fontMedium: PDFFont;
   page!: PDFPage;
   y = 0;
 
-  constructor(doc: PDFDocument, fontRegular: PDFFont, fontBold: PDFFont) {
+  constructor(doc: PDFDocument, fontLight: PDFFont, fontRegular: PDFFont, fontMedium: PDFFont) {
     this.doc = doc;
+    this.fontLight = fontLight;
     this.fontRegular = fontRegular;
-    this.fontBold = fontBold;
+    this.fontMedium = fontMedium;
   }
 
   newPage() {
@@ -334,9 +475,24 @@ class Layout {
       y: this.y - size,
       size,
       font,
-      color: opts.color ?? COLOR_TEXT,
+      color: opts.color ?? COLOR_INK,
     });
     this.y -= size + gap;
+  }
+
+  /** Etichetta minuta in maiuscolo con tracking ampio: il ritmo tipografico
+   * delle sezioni, identico a <Etichetta> nella pagina pubblica. */
+  kicker(
+    text: string,
+    opts: { size?: number; color?: ReturnType<typeof rgb>; tracking?: number; font?: PDFFont; gap?: number } = {},
+  ) {
+    const size = opts.size ?? 8.5;
+    const font = opts.font ?? this.fontMedium;
+    const color = opts.color ?? COLOR_GRAY;
+    const tracking = opts.tracking ?? size * 0.18;
+    this.ensureSpace(size + 4);
+    drawTrackedText(this.page, text.toLocaleUpperCase('it-IT'), MARGIN, this.y - size, size, font, color, tracking);
+    this.y -= size + (opts.gap ?? 4);
   }
 
   paragraph(
@@ -351,138 +507,220 @@ class Layout {
     const lines = wrapText(text, font, size, maxWidth);
     for (const l of lines) {
       this.ensureSpace(size + lineGap);
-      this.page.drawText(l, { x, y: this.y - size, size, font, color: opts.color ?? COLOR_TEXT });
+      this.page.drawText(l, { x, y: this.y - size, size, font, color: opts.color ?? COLOR_INK });
       this.y -= size + lineGap;
     }
     this.y -= (opts.gap ?? 4) - lineGap;
   }
 
-  divider() {
+  /** Come paragraph(), ma rispetta gli a capo manuali del testo (whitespace-
+   * pre-line a schermo): condizioni generali/specifiche e note di pagamento
+   * hanno paragrafi distinti che non vanno fusi in uno solo. */
+  preservedParagraph(
+    text: string,
+    opts: { size?: number; font?: PDFFont; color?: ReturnType<typeof rgb>; gap?: number; x?: number; maxWidth?: number } = {},
+  ) {
+    const blocks = text.split('\n');
+    const size = opts.size ?? 10;
+    blocks.forEach((block, i) => {
+      const isLast = i === blocks.length - 1;
+      if (block.trim() === '') {
+        this.spacer(size * 0.5);
+        return;
+      }
+      this.paragraph(block, { ...opts, gap: isLast ? (opts.gap ?? 6) : size * 0.45 });
+    });
+  }
+
+  divider(color: ReturnType<typeof rgb> = COLOR_LINE, thickness = 0.75) {
     this.ensureSpace(10);
     this.page.drawLine({
       start: { x: MARGIN, y: this.y },
       end: { x: PAGE_WIDTH - MARGIN, y: this.y },
-      thickness: 0.5,
-      color: COLOR_LINE,
+      thickness,
+      color,
     });
     this.y -= 10;
   }
 }
 
 // -----------------------------------------------------------------------------
-// Tabella delle righe offerta
+// Apertura del documento: marchio, titolo leggero, cliente, validità. Stessa
+// gerarchia della sezione di apertura di PublicOffer.tsx.
 // -----------------------------------------------------------------------------
 
-function drawLinesSection(layout: Layout, snapshot: OfferSnapshot) {
-  const hidePrices = shouldHideLinePrices(snapshot);
+function drawBrandHeader(layout: Layout): void {
+  const radius = 13;
+  const topY = layout.y;
+  const cy = topY - radius;
+  const cx = MARGIN + radius;
+  drawLarinMark(layout.page, cx, cy, radius, COLOR_ANTRACITE);
 
-  layout.line(hidePrices ? "Perimetro dell'offerta" : 'Voci offerte', {
-    size: 12,
-    font: layout.fontBold,
-    gap: 8,
-  });
+  const textX = cx + radius + 12;
+  const wordSize = 13;
+  const wordBaseline = cy - wordSize * 0.32;
+  drawTrackedText(layout.page, 'LARIN', textX, wordBaseline, wordSize, layout.fontMedium, COLOR_ANTRACITE, wordSize * 0.22);
 
-  if (hidePrices) {
-    // Prezzo unico omnicomprensivo: si elencano le voci comprese, senza i
-    // prezzi di riga che non sommerebbero al totale e confonderebbero il
-    // cliente invece di chiarire.
-    for (const l of snapshot.lines) {
-      const qtyNote = Number(l.quantity) !== 1 ? ` (x${formatQuantity(l.quantity)})` : '';
-      layout.paragraph(`• ${l.description}${qtyNote}`, { size: 10, gap: 6 });
-    }
-    layout.spacer(4);
-    layout.line(`Totale offerto: ${formatCurrency(snapshot.version.offered_total)}`, {
-      size: 12,
-      font: layout.fontBold,
-      gap: 4,
-    });
-    drawVatSummary(layout, snapshot);
-    return;
-  }
-
-  const cols = [
-    { label: 'Descrizione', x: MARGIN, width: 195, align: 'left' as const },
-    { label: 'Quantità', x: MARGIN + 195, width: 55, align: 'right' as const },
-    { label: 'Prezzo unitario', x: MARGIN + 250, width: 90, align: 'right' as const },
-    { label: 'Sconto', x: MARGIN + 340, width: 55, align: 'right' as const },
-    { label: 'Totale', x: MARGIN + 395, width: 100, align: 'right' as const },
-  ];
-
-  layout.ensureSpace(22);
-  for (const c of cols) {
-    drawAligned(layout.page, c.label, c.x, c.width, layout.y - 9, 9, layout.fontBold, c.align);
-  }
-  layout.y -= 14;
-  layout.divider();
-
-  for (const l of snapshot.lines) {
-    const descLines = wrapText(l.description, layout.fontRegular, 9.5, cols[0].width - 4);
-    const rowHeight = Math.max(descLines.length, 1) * 12 + 6;
-    layout.ensureSpace(rowHeight);
-    const rowTopY = layout.y;
-
-    descLines.forEach((dl, i) => {
-      layout.page.drawText(dl, {
-        x: cols[0].x,
-        y: rowTopY - 10 - i * 12,
-        size: 9.5,
-        font: layout.fontRegular,
-        color: COLOR_TEXT,
-      });
-    });
-
-    const cellY = rowTopY - 10;
-    drawAligned(layout.page, formatQuantity(l.quantity), cols[1].x, cols[1].width, cellY, 9.5, layout.fontRegular, 'right');
-    drawAligned(layout.page, formatCurrency(l.unit_list_price), cols[2].x, cols[2].width, cellY, 9.5, layout.fontRegular, 'right');
-    const discountText = Number(l.discount_percentage) > 0 ? formatPercentage(l.discount_percentage) : '-';
-    drawAligned(layout.page, discountText, cols[3].x, cols[3].width, cellY, 9.5, layout.fontRegular, 'right');
-    drawAligned(layout.page, formatCurrency(l.line_total), cols[4].x, cols[4].width, cellY, 9.5, layout.fontBold, 'right');
-
-    layout.y -= rowHeight;
-  }
-
-  layout.divider();
-  layout.spacer(2);
-  drawAligned(
+  const payoffSize = 6;
+  const payoffBaseline = wordBaseline - 10;
+  drawTrackedText(
     layout.page,
-    `Totale offerto: ${formatCurrency(snapshot.version.offered_total)}`,
-    MARGIN,
-    CONTENT_WIDTH,
-    layout.y - 12,
-    12,
-    layout.fontBold,
-    'right',
+    'CONNECT THE DOTS',
+    textX,
+    payoffBaseline,
+    payoffSize,
+    layout.fontMedium,
+    COLOR_PAYOFF,
+    payoffSize * 0.28,
   );
-  layout.y -= 20;
 
-  drawVatSummary(layout, snapshot);
+  layout.y = topY - radius * 2 - 6;
+}
+
+function drawOfferHeader(layout: Layout, snapshot: OfferSnapshot, options: GenerateOfferPdfOptions): void {
+  drawBrandHeader(layout);
+  layout.spacer(6);
+  layout.divider();
+  layout.spacer(24);
+
+  layout.kicker('Offerta commerciale');
+  layout.spacer(6);
+
+  // Titolo: "Offerta" leggero + riferimento in peso medio, come l'h1 della
+  // pagina pubblica; "v{n}" piccolo e grigio accanto, sulla stessa riga.
+  const titleSize = 27;
+  layout.ensureSpace(titleSize + 10);
+  const baseline = layout.y - titleSize;
+  const prefix = sanitizeForPdf('Offerta ', layout.fontLight);
+  layout.page.drawText(prefix, { x: MARGIN, y: baseline, size: titleSize, font: layout.fontLight, color: COLOR_INK });
+  let cx = MARGIN + layout.fontLight.widthOfTextAtSize(prefix, titleSize);
+  const reference = sanitizeForPdf(snapshot.offer.reference, layout.fontMedium);
+  layout.page.drawText(reference, { x: cx, y: baseline, size: titleSize, font: layout.fontMedium, color: COLOR_INK });
+  cx += layout.fontMedium.widthOfTextAtSize(reference, titleSize);
+  const versionText = sanitizeForPdf(`v${snapshot.version.version_number}`, layout.fontRegular);
+  layout.page.drawText(versionText, { x: cx + 8, y: baseline + 1, size: 10, font: layout.fontRegular, color: COLOR_GRAY });
+  layout.y = baseline - 10;
+
+  layout.line(`Documento congelato il ${formatDateTimeIt(options.frozenAt)}`, { size: 8.5, color: COLOR_GRAY, gap: 14 });
+
+  // Nome cliente: stesso trattamento della pagina pubblica (antracite, corpo
+  // più grande del testo normale). L'email non c'è a schermo, ma il PDF è un
+  // documento legale che ne beneficia: resta, in piccolo e discreto.
+  layout.line(snapshot.client.name, {
+    size: 13,
+    font: layout.fontRegular,
+    color: COLOR_ANTRACITE,
+    gap: snapshot.client.email ? 3 : 14,
+  });
+  if (snapshot.client.email) {
+    layout.line(snapshot.client.email, { size: 9, color: COLOR_GRAY, gap: 16 });
+  }
+
+  if (snapshot.version.valid_until) {
+    layout.ensureSpace(18);
+    const barY = layout.y - 7;
+    layout.page.drawRectangle({ x: MARGIN, y: barY, width: 40, height: 3, color: COLOR_ACCENT });
+    layout.page.drawText(
+      sanitizeForPdf(`Offerta valida fino al ${formatDateItLong(snapshot.version.valid_until)}`, layout.fontRegular),
+      { x: MARGIN + 52, y: barY - 1, size: 10, font: layout.fontRegular, color: COLOR_MUTED },
+    );
+    layout.y = barY - 16;
+  }
+
+  layout.spacer(8);
+  layout.divider();
+  layout.spacer(24);
+}
+
+// -----------------------------------------------------------------------------
+// Composizione dell'offerta: tabella o elenco a seconda del prezzo unico
+// -----------------------------------------------------------------------------
+
+const TABLE_COLS = [
+  { label: 'Descrizione', width: 190, align: 'left' as const },
+  { label: 'QTÀ', width: 38, align: 'right' as const },
+  { label: 'Prezzo', width: 78, align: 'right' as const },
+  { label: 'Sconto', width: 50, align: 'right' as const },
+  { label: 'IVA', width: 42, align: 'right' as const },
+  { label: 'Totale', width: 97, align: 'right' as const },
+];
+
+function tableColX(): number[] {
+  const xs: number[] = [];
+  let x = MARGIN;
+  for (const c of TABLE_COLS) {
+    xs.push(x);
+    x += c.width;
+  }
+  return xs;
+}
+
+/** Punto pieno + testo: come i bullet <span className="rounded-full bg-[#4E5758]">
+ * dell'elenco a prezzo unico omnicomprensivo, non un carattere "•". */
+function drawBulletParagraph(layout: Layout, text: string): void {
+  const bulletX = MARGIN + 3;
+  const textX = MARGIN + 14;
+  const textWidth = CONTENT_WIDTH - 14;
+  const size = 10;
+  const lineH = 14;
+  const lines = wrapText(text, layout.fontRegular, size, textWidth);
+  const rowHeight = Math.max(lines.length, 1) * lineH + 6;
+  layout.ensureSpace(rowHeight);
+  const topY = layout.y;
+  layout.page.drawCircle({ x: bulletX, y: topY - 7, size: 1.4, color: COLOR_ANTRACITE });
+  lines.forEach((l, i) => {
+    layout.page.drawText(sanitizeForPdf(l, layout.fontRegular), {
+      x: textX,
+      y: topY - 10 - i * lineH,
+      size,
+      font: layout.fontRegular,
+      color: COLOR_INK,
+    });
+  });
+  layout.y -= rowHeight;
+}
+
+/** Il totale sta da solo, staccato: filetto scuro sopra a tutta larghezza,
+ * come <Totale> nella pagina pubblica (border-t border-[#21282A]). */
+function drawTotaleBlock(layout: Layout, total: number): void {
+  layout.spacer(8);
+  const valueSize = 18;
+  const labelSize = 8.5;
+  layout.ensureSpace(valueSize + 20);
+  layout.page.drawLine({
+    start: { x: MARGIN, y: layout.y },
+    end: { x: PAGE_WIDTH - MARGIN, y: layout.y },
+    thickness: 1,
+    color: COLOR_INK,
+  });
+  layout.y -= 16;
+  const baseline = layout.y - valueSize;
+  drawTrackedText(layout.page, 'TOTALE OFFERTO', MARGIN, baseline, labelSize, layout.fontMedium, COLOR_GRAY, labelSize * 0.18);
+  drawAligned(layout.page, formatCurrency(total), MARGIN, CONTENT_WIDTH, baseline, valueSize, layout.fontMedium, 'right', COLOR_INK);
+  layout.y = baseline - 6;
 }
 
 /**
  * L'IVA sul documento che il cliente firma non è un dettaglio estetico: senza,
- * si firma un importo senza sapere se è netto o lordo. Il dato sta nello
- * snapshot per riga, quindi si espone da lì e non da un testo libero che
- * qualcuno potrebbe dimenticare di scrivere.
- *
- * Con una sola aliquota si scrive la riga classica imponibile, IVA, totale. Con
- * aliquote diverse si dettaglia per aliquota, perché sommarle darebbe un numero
- * che non corrisponde a nessuna delle due.
+ * si firma un importo senza sapere se è netto o lordo. Requisito legale che
+ * resta anche se la pagina pubblica mostra l'IVA solo per riga: qui si
+ * aggiunge il riepilogo aggregato (imponibile, aliquota, totale).
  */
-function drawVatSummary(layout: Layout, snapshot: OfferSnapshot) {
+function drawVatSummary(layout: Layout, snapshot: OfferSnapshot): void {
   const lines = snapshot.lines ?? [];
   if (lines.length === 0) return;
 
   const imponibile = Number(snapshot.version.offered_total);
   const aliquote = [...new Set(lines.map((l) => Number(l.vat_rate)))].sort((a, b) => a - b);
 
-  layout.spacer(4);
+  layout.spacer(6);
 
   if (aliquote.length === 1) {
     const aliquota = aliquote[0];
     const iva = Math.round(imponibile * aliquota) / 100;
     layout.line(
       `Imponibile ${formatCurrency(imponibile)}, IVA ${formatPercentage(aliquota)} ${formatCurrency(iva)}, totale ${formatCurrency(imponibile + iva)}`,
-      { size: 9.5, font: layout.fontRegular, color: COLOR_GRAY, gap: 4 },
+      { size: 9, font: layout.fontRegular, color: COLOR_GRAY, gap: 4 },
     );
     return;
   }
@@ -493,98 +731,314 @@ function drawVatSummary(layout: Layout, snapshot: OfferSnapshot) {
   // inventare una ripartizione che nessuno ha deciso.
   layout.line(
     `Importi al netto di IVA, con aliquote ${aliquote.map((a) => formatPercentage(a)).join(' e ')} secondo le voci sopra.`,
-    { size: 9.5, font: layout.fontRegular, color: COLOR_GRAY, gap: 4 },
+    { size: 9, font: layout.fontRegular, color: COLOR_GRAY, gap: 4 },
   );
 }
 
-// -----------------------------------------------------------------------------
-// Corpo del documento: intestazione, cliente, righe, piano, condizioni, validità
-// -----------------------------------------------------------------------------
+function drawLinesSection(layout: Layout, snapshot: OfferSnapshot): void {
+  layout.kicker("Composizione dell'offerta");
+  layout.spacer(12);
 
-function renderOfferContent(layout: Layout, snapshot: OfferSnapshot, options: GenerateOfferPdfOptions) {
-  layout.line('LARIN', { size: 20, font: layout.fontBold, gap: 6 });
-  layout.line(`Offerta ${snapshot.offer.reference} - Versione ${snapshot.version.version_number}`, {
-    size: 13,
-    font: layout.fontBold,
-    gap: 3,
+  if (snapshot.lines.length === 0) {
+    layout.paragraph('Nessuna riga in questa offerta.', { size: 9.5, color: COLOR_GRAY, gap: 4 });
+    return;
+  }
+
+  const hidePrices = shouldHideLinePrices(snapshot);
+
+  if (hidePrices) {
+    // Prezzo unico omnicomprensivo: si elencano le voci comprese, senza i
+    // prezzi di riga che non sommerebbero al totale e confonderebbero il
+    // cliente invece di chiarire.
+    for (const l of snapshot.lines) {
+      const qtyNote = Number(l.quantity) !== 1 ? ` (x${formatQuantity(l.quantity)})` : '';
+      drawBulletParagraph(layout, `${l.description}${qtyNote}`);
+    }
+    layout.paragraph("Prezzo complessivo per l'intero pacchetto descritto sopra.", {
+      size: 9,
+      color: COLOR_GRAY,
+      gap: 4,
+    });
+    drawTotaleBlock(layout, snapshot.version.offered_total);
+    drawVatSummary(layout, snapshot);
+    return;
+  }
+
+  const xs = tableColX();
+  const headerSize = 8.5;
+  const headerTracking = headerSize * 0.14;
+  layout.ensureSpace(headerSize + 18);
+  TABLE_COLS.forEach((c, i) => {
+    if (c.align === 'left') {
+      drawTrackedText(layout.page, c.label, xs[i], layout.y - headerSize, headerSize, layout.fontMedium, COLOR_GRAY, headerTracking);
+    } else {
+      drawTrackedTextRight(
+        layout.page,
+        c.label,
+        xs[i] + c.width,
+        layout.y - headerSize,
+        headerSize,
+        layout.fontMedium,
+        COLOR_GRAY,
+        headerTracking,
+      );
+    }
   });
-  layout.line(`Documento congelato il ${formatDateTimeIt(options.frozenAt)}`, {
-    size: 9,
-    color: COLOR_GRAY,
-    gap: 10,
-  });
+  layout.y -= headerSize + 8;
   layout.divider();
   layout.spacer(4);
 
-  layout.line('Cliente', { size: 11, font: layout.fontBold, gap: 4 });
-  layout.line(snapshot.client.name, { size: 11, gap: snapshot.client.email ? 2 : 10 });
-  if (snapshot.client.email) {
-    layout.line(snapshot.client.email, { size: 9, color: COLOR_GRAY, gap: 10 });
-  }
+  snapshot.lines.forEach((l, idx) => {
+    const descLines = wrapText(l.description, layout.fontRegular, 9.5, TABLE_COLS[0].width - 4);
+    const lineH = 13;
+    const rowHeight = Math.max(descLines.length, 1) * lineH + 14;
+    layout.ensureSpace(rowHeight);
+    const rowTopY = layout.y;
 
-  drawLinesSection(layout, snapshot);
-
-  if (snapshot.payment_plan.length > 0) {
-    layout.spacer(6);
-    layout.line('Piano di pagamento', { size: 12, font: layout.fontBold, gap: 8 });
-    for (const item of snapshot.payment_plan) {
-      layout.paragraph(`• ${paymentPlanSentence(item)}`, { size: 10, gap: 6 });
-    }
-  }
-
-  layout.spacer(6);
-  layout.line('Condizioni generali', { size: 12, font: layout.fontBold, gap: 8 });
-  const generalTerms = snapshot.terms.general?.trim();
-  layout.paragraph(generalTerms || 'Nessuna condizione generale registrata.', { size: 9.5, gap: 6 });
-
-  if (snapshot.terms.specific.length > 0) {
-    layout.spacer(6);
-    layout.line('Condizioni specifiche', { size: 12, font: layout.fontBold, gap: 8 });
-    for (const spec of snapshot.terms.specific) {
-      layout.line(spec.product_name, { size: 10, font: layout.fontBold, gap: 3 });
-      layout.paragraph(spec.text, { size: 9.5, gap: 8 });
-    }
-  }
-
-  if (snapshot.version.valid_until) {
-    layout.spacer(6);
-    layout.line(`Validità: offerta valida fino al ${formatDateIt(snapshot.version.valid_until)}.`, {
-      size: 9.5,
-      font: layout.fontBold,
+    descLines.forEach((dl, i) => {
+      layout.page.drawText(sanitizeForPdf(dl, layout.fontRegular), {
+        x: xs[0],
+        y: rowTopY - 11 - i * lineH,
+        size: 9.5,
+        font: layout.fontRegular,
+        color: COLOR_INK,
+      });
     });
+
+    const cellY = rowTopY - 11;
+    drawAligned(layout.page, formatQuantity(l.quantity), xs[1], TABLE_COLS[1].width, cellY, 9.5, layout.fontRegular, 'right');
+    drawAligned(layout.page, formatCurrency(l.unit_list_price), xs[2], TABLE_COLS[2].width, cellY, 9.5, layout.fontRegular, 'right');
+    const discountText = Number(l.discount_percentage) > 0 ? formatPercentage(l.discount_percentage) : '–';
+    drawAligned(layout.page, discountText, xs[3], TABLE_COLS[3].width, cellY, 9.5, layout.fontRegular, 'right', COLOR_GRAY);
+    drawAligned(layout.page, formatPercentage(l.vat_rate), xs[4], TABLE_COLS[4].width, cellY, 9.5, layout.fontRegular, 'right', COLOR_GRAY);
+    drawAligned(layout.page, formatCurrency(l.line_total), xs[5], TABLE_COLS[5].width, cellY, 9.5, layout.fontMedium, 'right');
+
+    layout.y -= rowHeight;
+    // Filetto chiarissimo tra le righe (non sotto l'ultima: la chiude il
+    // filetto scuro del totale, che arriverebbe troppo vicino altrimenti).
+    if (idx < snapshot.lines.length - 1) {
+      layout.page.drawLine({
+        start: { x: MARGIN, y: layout.y },
+        end: { x: PAGE_WIDTH - MARGIN, y: layout.y },
+        thickness: 0.5,
+        color: COLOR_LINE_FAINT,
+      });
+    }
+  });
+
+  drawTotaleBlock(layout, snapshot.version.offered_total);
+  drawVatSummary(layout, snapshot);
+}
+
+// -----------------------------------------------------------------------------
+// Piano di pagamento: il "connect the dots" del marchio, non un elenco puntato
+// -----------------------------------------------------------------------------
+
+function drawPaymentPlanSection(layout: Layout, items: OfferSnapshotPaymentPlanItem[]): void {
+  if (items.length === 0) return;
+
+  layout.divider();
+  layout.spacer(24);
+  layout.kicker('Piano di pagamento');
+  layout.spacer(16);
+
+  const dotX = MARGIN + 8;
+  const textX = MARGIN + 24;
+  const textWidth = CONTENT_WIDTH - 24;
+  const dotRadius = 4;
+  let prevPage: PDFPage | null = null;
+  let prevDotY: number | null = null;
+
+  items.forEach((item, idx) => {
+    const sentence = paymentPlanSentence(item);
+    const lines = wrapText(sentence, layout.fontRegular, 10, textWidth);
+    const lineH = 14;
+    const textBlockHeight = Math.max(lines.length, 1) * lineH;
+    const rowHeight = textBlockHeight + 10;
+    layout.ensureSpace(rowHeight + 4);
+    const page = layout.page;
+    const topY = layout.y;
+    const dotY = topY - 9;
+
+    // Linea sottile che collega i punti: solo fra punti sulla stessa pagina,
+    // un piano di pagamento non dovrebbe comunque avere decine di tranche.
+    if (prevPage === page && prevDotY !== null) {
+      page.drawLine({ start: { x: dotX, y: prevDotY }, end: { x: dotX, y: dotY }, thickness: 1, color: COLOR_LINE });
+    }
+
+    const isFirst = idx === 0;
+    page.drawCircle({
+      x: dotX,
+      y: dotY,
+      size: dotRadius,
+      color: isFirst ? COLOR_ANTRACITE : COLOR_WHITE,
+      borderWidth: 1.4,
+      borderColor: isFirst ? COLOR_ANTRACITE : COLOR_DOT_BORDER,
+    });
+
+    lines.forEach((l, i) => {
+      page.drawText(sanitizeForPdf(l, layout.fontRegular), {
+        x: textX,
+        y: topY - 10 - i * lineH,
+        size: 10,
+        font: layout.fontRegular,
+        color: COLOR_INK,
+      });
+    });
+
+    prevPage = page;
+    prevDotY = dotY;
+    layout.y -= rowHeight;
+  });
+}
+
+// -----------------------------------------------------------------------------
+// Note di pagamento e condizioni
+// -----------------------------------------------------------------------------
+
+function drawPaymentNotesSection(layout: Layout, text: string | null): void {
+  const trimmed = text?.trim();
+  if (!trimmed) return;
+
+  layout.divider();
+  layout.spacer(24);
+  layout.kicker('Note di pagamento');
+  layout.spacer(14);
+  layout.preservedParagraph(trimmed, { size: 9.5, color: COLOR_INK, gap: 6 });
+}
+
+function drawConditionsSection(layout: Layout, snapshot: OfferSnapshot): void {
+  const general = snapshot.terms.general?.trim() ?? '';
+  const specific = snapshot.terms.specific ?? [];
+  if (!general && specific.length === 0) return;
+
+  layout.divider();
+  layout.spacer(24);
+  layout.kicker('Condizioni');
+  layout.spacer(14);
+
+  if (general) {
+    layout.preservedParagraph(snapshot.terms.general, { size: 9.5, color: COLOR_ANTRACITE, gap: 6 });
+  }
+
+  if (specific.length > 0) {
+    if (general) layout.spacer(10);
+    for (const spec of specific) {
+      layout.kicker(spec.product_name, { size: 8.5, tracking: 8.5 * 0.14, gap: 5 });
+      layout.preservedParagraph(spec.text, { size: 9.5, color: COLOR_ANTRACITE, gap: 12 });
+    }
   }
 }
 
-function drawFooters(doc: PDFDocument, font: PDFFont, documentHash: string) {
+// -----------------------------------------------------------------------------
+// Corpo del documento: apertura, righe, piano di pagamento, note, condizioni
+// -----------------------------------------------------------------------------
+
+function renderOfferContent(layout: Layout, snapshot: OfferSnapshot, options: GenerateOfferPdfOptions) {
+  drawOfferHeader(layout, snapshot, options);
+  drawLinesSection(layout, snapshot);
+  drawPaymentPlanSection(layout, snapshot.payment_plan ?? []);
+  drawPaymentNotesSection(layout, snapshot.version.payment_terms_text);
+  drawConditionsSection(layout, snapshot);
+}
+
+function drawFooters(doc: PDFDocument, font: PDFFont, documentHash: string): void {
   const pages = doc.getPages();
   const total = pages.length;
   const shortHash = formatHashForDisplay(documentHash.slice(0, 16));
+  const footerY = 26;
+  const labelSize = 7.5;
+  const tracking = labelSize * 0.12;
+
   pages.forEach((page, idx) => {
-    page.drawText(`Pagina ${idx + 1} di ${total}`, {
-      x: MARGIN,
-      y: 24,
-      size: 8,
-      font,
-      color: COLOR_GRAY,
+    page.drawLine({
+      start: { x: MARGIN, y: footerY + 14 },
+      end: { x: PAGE_WIDTH - MARGIN, y: footerY + 14 },
+      thickness: 0.5,
+      color: COLOR_LINE,
     });
-    const hashLabel = `Documento verificabile, hash ${shortHash}`;
-    const w = font.widthOfTextAtSize(hashLabel, 8);
-    page.drawText(hashLabel, {
-      x: PAGE_WIDTH - MARGIN - w,
-      y: 24,
-      size: 8,
-      font,
-      color: COLOR_GRAY,
-    });
+    // Marchio ridotto: solo l'anello, come richiesto per il piè di pagina.
+    drawLarinMark(page, MARGIN + 5, footerY + 4, 5, COLOR_ANTRACITE, { ringOnly: true });
+    drawTrackedText(page, `PAGINA ${idx + 1} DI ${total}`, MARGIN + 18, footerY, labelSize, font, COLOR_GRAY, tracking);
+    const hashLabel = `DOCUMENTO VERIFICABILE, HASH ${shortHash}`;
+    drawTrackedTextRight(page, hashLabel, PAGE_WIDTH - MARGIN, footerY, labelSize, font, COLOR_GRAY, tracking);
   });
+}
+
+function drawCertificateHeader(layout: Layout): void {
+  const radius = 11;
+  const topY = layout.y;
+  const cy = topY - radius;
+  const cx = MARGIN + radius;
+  drawLarinMark(layout.page, cx, cy, radius, COLOR_ANTRACITE);
+
+  const textX = cx + radius + 10;
+  const titleSize = 13;
+  const baseline = cy - titleSize * 0.32;
+  drawTrackedText(
+    layout.page,
+    'CERTIFICATO DI FIRMA',
+    textX,
+    baseline,
+    titleSize,
+    layout.fontMedium,
+    COLOR_ANTRACITE,
+    titleSize * 0.16,
+  );
+
+  layout.y = topY - radius * 2 - 10;
+  layout.spacer(6);
+  layout.divider();
+  layout.spacer(22);
+}
+
+// -----------------------------------------------------------------------------
+// Font: Manrope (300/400/500) incorporato con fontkit, letto dalla cartella
+// della function. Il subsetting riduce il PDF alle sole lettere usate:
+// un'offerta breve non deve portarsi dietro l'intero alfabeto di Manrope.
+// -----------------------------------------------------------------------------
+
+/** Legge la copertura glifi del font grezzo (fontkit) e la registra nella
+ * WeakMap indicizzata sul PDFFont incorporato, per il ripiego di sanitizeForPdf. */
+function registerGlyphCoverage(pdfFont: PDFFont, rawBytes: Uint8Array): void {
+  try {
+    // deno-lint-ignore no-explicit-any
+    const rawFont = (fontkit as any).create(rawBytes);
+    glyphCoverage.set(pdfFont, (codePoint: number) => rawFont.hasGlyphForCodePoint(codePoint));
+  } catch (error) {
+    console.error('impossibile leggere la copertura glifi del font, si assume tutto codificabile', error);
+  }
+}
+
+/** Base64 -> byte, stesso schema di decodeSignaturePng() in index.ts. */
+function decodeBase64(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function loadFonts(doc: PDFDocument): Promise<{ light: PDFFont; regular: PDFFont; medium: PDFFont }> {
+  doc.registerFontkit(fontkit);
+  const lightBytes = decodeBase64(MANROPE_LIGHT_BASE64);
+  const regularBytes = decodeBase64(MANROPE_REGULAR_BASE64);
+  const mediumBytes = decodeBase64(MANROPE_MEDIUM_BASE64);
+  const [light, regular, medium] = await Promise.all([
+    doc.embedFont(lightBytes, { subset: true }),
+    doc.embedFont(regularBytes, { subset: true }),
+    doc.embedFont(mediumBytes, { subset: true }),
+  ]);
+  registerGlyphCoverage(light, lightBytes);
+  registerGlyphCoverage(regular, regularBytes);
+  registerGlyphCoverage(medium, mediumBytes);
+  return { light, regular, medium };
 }
 
 /** Genera il PDF non firmato dell'offerta, dallo snapshot congelato. */
 export async function generateOfferPdf(snapshot: OfferSnapshot, options: GenerateOfferPdfOptions): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  const fontRegular = await doc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const layout = new Layout(doc, fontRegular, fontBold);
+  const fonts = await loadFonts(doc);
+  const layout = new Layout(doc, fonts.light, fonts.regular, fonts.medium);
   layout.newPage();
 
   renderOfferContent(layout, snapshot, options);
@@ -592,14 +1046,15 @@ export async function generateOfferPdf(snapshot: OfferSnapshot, options: Generat
   // I piè di pagina si disegnano per ultimi, quando il numero totale di
   // pagine è definitivo: pdf-lib non permette di "ripulire" una pagina già
   // disegnata, quindi vanno scritti una sola volta a documento completo.
-  drawFooters(doc, fontRegular, options.documentHash);
+  drawFooters(doc, fonts.medium, options.documentHash);
 
   return doc.save();
 }
 
 /**
  * Genera il PDF firmato: stesso contenuto di generateOfferPdf più una pagina
- * finale di certificazione in stile SignRequest. Ricostruita da zero (non a
+ * finale di certificazione in stile SignRequest, con la stessa veste Larin
+ * (marchio, etichette maiuscole, filetti sottili). Ricostruita da zero (non a
  * partire dai byte già salvati) in un solo passaggio, così i piè di pagina si
  * scrivono una volta sola con il conteggio pagine corretto, compresa quella
  * di certificazione.
@@ -610,26 +1065,25 @@ export async function generateSignedOfferPdf(
   cert: SignatureCertificateOptions,
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  const fontRegular = await doc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const layout = new Layout(doc, fontRegular, fontBold);
+  const fonts = await loadFonts(doc);
+  const layout = new Layout(doc, fonts.light, fonts.regular, fonts.medium);
   layout.newPage();
 
   renderOfferContent(layout, snapshot, options);
 
   layout.newPage();
-  layout.line('Certificato di firma', { size: 18, font: fontBold, gap: 12 });
+  drawCertificateHeader(layout);
 
   // Il certificato dimostra COSA è stato firmato (l'hash del documento),
   // non solo quando: è il punto che lo distingue da un semplice timestamp.
   layout.paragraph(
     "Questo certificato attesta che il documento a cui è allegato è stato firmato elettronicamente dalla persona indicata di seguito. L'impronta digitale (hash SHA-256) riportata in fondo identifica in modo univoco il contenuto esatto del documento firmato: chi la verifica dimostra che cosa è stato firmato, non soltanto quando.",
-    { size: 10, gap: 14 },
+    { size: 10, color: COLOR_INK, gap: 18 },
   );
 
   const field = (label: string, value: string) => {
-    layout.line(label, { size: 9, font: fontBold, color: COLOR_GRAY, gap: 2 });
-    layout.paragraph(value, { size: 11, gap: 12 });
+    layout.kicker(label, { size: 8, gap: 4 });
+    layout.paragraph(value, { size: 11, color: COLOR_INK, gap: 16 });
   };
 
   field('Nominativo', cert.signerName);
@@ -640,7 +1094,7 @@ export async function generateSignedOfferPdf(
   field('User agent', cert.userAgent || 'non rilevato');
   field('Hash del documento firmato (SHA-256)', formatHashForDisplay(options.documentHash));
 
-  layout.line('Firma', { size: 9, font: fontBold, color: COLOR_GRAY, gap: 6 });
+  layout.kicker('Firma', { size: 8, gap: 10 });
 
   // L'immagine viene validata prima di essere accettata, ma se per qualunque
   // ragione risultasse illeggibile qui, il certificato deve uscire lo stesso:
@@ -660,9 +1114,9 @@ export async function generateSignedOfferPdf(
     const scale = Math.min(maxWidth / pngImage.width, maxHeight / pngImage.height, 1);
     const imgWidth = pngImage.width * scale;
     const imgHeight = pngImage.height * scale;
-    const padding = 10;
+    const padding = 12;
 
-    layout.ensureSpace(imgHeight + padding * 2 + 6);
+    layout.ensureSpace(imgHeight + padding * 2 + 14);
     const boxY = layout.y - imgHeight - padding * 2;
     layout.page.drawRectangle({
       x: MARGIN,
@@ -678,15 +1132,25 @@ export async function generateSignedOfferPdf(
       width: imgWidth,
       height: imgHeight,
     });
-    layout.y = boxY - 10;
+    // Filetto giallo sotto, come la riga di firma di un contratto di carta:
+    // l'unico altro punto del documento, insieme alla validità, dove
+    // compare l'accento giallo.
+    layout.page.drawRectangle({
+      x: MARGIN,
+      y: boxY - 4,
+      width: imgWidth + padding * 2,
+      height: 2.5,
+      color: COLOR_ACCENT,
+    });
+    layout.y = boxY - 18;
   } else {
     layout.paragraph(
       "Il tratto della firma non è disponibile in forma grafica. La firma resta provata dai dati riportati sopra e dall'impronta del documento.",
-      { size: 9.5, gap: 6 },
+      { size: 9.5, color: COLOR_GRAY, gap: 6 },
     );
   }
 
-  drawFooters(doc, fontRegular, options.documentHash);
+  drawFooters(doc, fonts.medium, options.documentHash);
 
   return doc.save();
 }
